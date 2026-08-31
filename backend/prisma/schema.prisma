@@ -209,6 +209,10 @@ model Company {
   exporterType          String                 @default("NO_HABITUAL")
   rimpe                 Boolean                @default(false)
   withholdingAgent      Boolean                @default(false)
+  specialContributorResolution String?
+  withholdingAgentResolution   String?
+  largeTaxpayerResolution      String?
+  sriSoftwareProviderRuc       String?
   city                  String?
   decimalPlaces         Int                    @default(2)
   notificationEmail     String?
@@ -833,11 +837,15 @@ model Sale {
   total                  Decimal          @default(0) @db.Decimal(18, 6)
   sriStatus              String           @default("NOT_APPLICABLE")
   sriAccessKey           String?
+  sriUnsignedXml         String?          @db.Text
   sriXml                 String?          @db.Text
   sriGeneratedAt         DateTime?
   sriSentAt              DateTime?
   sriAuthorizationNumber String?
   sriAuthorizationDate   DateTime?
+  sriReceptionResponse   String?          @db.Text
+  sriAuthorizationXml    String?          @db.Text
+  sriMessages            Json?
   sriError               String?          @db.Text
   correlationId          String           @default(uuid()) @db.Uuid
   confirmedAt            DateTime         @default(now())

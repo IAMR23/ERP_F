@@ -1,6 +1,12 @@
 export const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3100/api/v1";
 export const API_ORIGIN = API_URL.replace(/\/api\/v1\/?$/, "");
 
+function apiError(data, fallback = "Error de API") {
+  const error = new Error(data.message || fallback);
+  error.details = data.details || null;
+  return error;
+}
+
 function networkErrorMessage(error) {
   if (error instanceof TypeError) {
     return `No se pudo conectar con la API en ${API_URL}. Verifica que el backend este activo, que use ese puerto y que CORS permita el origen del frontend.`;
@@ -31,7 +37,7 @@ export async function api(path, options = {}) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.message || "Error de API");
+    throw apiError(data);
   }
 
   return data;
@@ -51,7 +57,7 @@ export async function apiForm(path, formData, options = {}) {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    throw new Error(data.message || "Error de API");
+    throw apiError(data);
   }
 
   return data;

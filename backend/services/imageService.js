@@ -3,6 +3,7 @@ const path = require("path");
 const sharp = require("sharp");
 
 const uploadsRoot = path.resolve(__dirname, "../uploads");
+const privateUploadsRoot = path.resolve(__dirname, "../private-uploads");
 const productUploads = path.join(uploadsRoot, "products");
 
 function validationError(message) {
@@ -16,6 +17,17 @@ function storedFilePath(objectKey) {
   const absolutePath = path.resolve(uploadsRoot, normalized);
 
   if (!absolutePath.startsWith(`${uploadsRoot}${path.sep}`)) {
+    throw validationError("Archivo almacenado invalido");
+  }
+
+  return absolutePath;
+}
+
+function storedPrivateFilePath(objectKey) {
+  const normalized = path.normalize(objectKey || "").replace(/^(\.\.(\\|\/|$))+/, "");
+  const absolutePath = path.resolve(privateUploadsRoot, normalized);
+
+  if (!absolutePath.startsWith(`${privateUploadsRoot}${path.sep}`)) {
     throw validationError("Archivo almacenado invalido");
   }
 
@@ -70,10 +82,10 @@ async function storeCompanyProformaSignature(file) {
   }
 
   if (path.extname(file.originalname || "").toLowerCase() !== ".p12") {
-    throw validationError("La firma de proforma debe ser un archivo con extension .p12");
+    throw validationError("El certificado SRI debe ser un archivo con extension .p12");
   }
 
-  const uploadFolder = path.join(uploadsRoot, "certificates");
+  const uploadFolder = path.join(privateUploadsRoot, "certificates");
   await fs.mkdir(uploadFolder, { recursive: true });
 
   const fileName = `${Date.now()}-${cryptoRandom()}.p12`;
@@ -85,7 +97,6 @@ async function storeCompanyProformaSignature(file) {
 
   return {
     objectKey: relativePath,
-    url: `/uploads/${relativePath}`,
     mimeType: file.mimetype || "application/x-pkcs12",
     sizeBytes: stat.size,
     originalFileName: file.originalname
@@ -97,6 +108,15 @@ async function removeStoredImage(objectKey) {
     return;
   }
 
+  if (String(objectKey).startsWith("certificates/")) {
+    try {
+      await fs.unlink(storedPrivateFilePath(objectKey));
+      return;
+    } catch {
+      // Fall back to the legacy public uploads location below.
+    }
+  }
+
   try {
     await fs.unlink(storedFilePath(objectKey));
   } catch {
@@ -105,6 +125,16 @@ async function removeStoredImage(objectKey) {
 }
 
 async function readStoredFile(objectKey) {
+  if (String(objectKey || "").startsWith("certificates/")) {
+    try {
+      return await fs.readFile(storedPrivateFilePath(objectKey));
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
   return fs.readFile(storedFilePath(objectKey));
 }
 

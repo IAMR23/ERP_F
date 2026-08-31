@@ -3,6 +3,10 @@ const env = require("../config/env");
 const path = require("path");
 const { readStoredFile } = require("./imageService");
 const { buildSriInvoiceXml } = require("./sriInvoiceXmlService");
+const { signSriInvoiceXml } = require("./sriSignatureService");
+const { queryAuthorization, sendDocument } = require("./sriSoapClient");
+const { validateInvoiceXml } = require("./sriXsdValidationService");
+const { buildRidePdf, documentParts } = require("./ridePdfService");
 
 const DOCUMENT_TYPES = ["INVOICE", "CREDIT_NOTE", "SALES_NOTE", "PROFORMA"];
 const SALE_STATUSES = ["PENDING_DELIVERY", "CONFIRMED", "VOIDED"];
@@ -10,6 +14,12 @@ const SALE_STATUSES = ["PENDING_DELIVERY", "CONFIRMED", "VOIDED"];
 function badRequest(message) {
   const error = new Error(message);
   error.statusCode = 400;
+  return error;
+}
+
+function badRequestWithDetails(message, details) {
+  const error = badRequest(message);
+  error.details = details;
   return error;
 }
 
@@ -108,11 +118,15 @@ function documentSelect(options = {}) {
     total: true,
     sriStatus: true,
     sriAccessKey: true,
+    sriUnsignedXml: includeXml,
     sriXml: includeXml,
     sriGeneratedAt: true,
     sriSentAt: true,
     sriAuthorizationNumber: true,
     sriAuthorizationDate: true,
+    sriReceptionResponse: includeXml,
+    sriAuthorizationXml: includeXml,
+    sriMessages: true,
     sriError: true,
     createdAt: true,
     company: {
@@ -124,10 +138,19 @@ function documentSelect(options = {}) {
         mainAddress: true,
         email: true,
         phone: true,
+        logoObjectKey: true,
         accountingRequired: true,
         sriEnvironment: true,
         ...(includeCompanySignature ? { proformaSignatureKey: true } : {}),
-        currency: true
+        currency: true,
+        specialContributor: true,
+        specialContributorResolution: true,
+        largeTaxpayer: true,
+        largeTaxpayerResolution: true,
+        rimpe: true,
+        withholdingAgent: true,
+        withholdingAgentResolution: true,
+        sriSoftwareProviderRuc: true
       }
     },
     branch: { select: { id: true, code: true, name: true, address: true } },
@@ -196,6 +219,7 @@ function mapDocument(document) {
       authorizationNumber: document.sriAuthorizationNumber,
       authorizationDate: document.sriAuthorizationDate,
       error: document.sriError,
+      messages: document.sriMessages || [],
       hasXml: Boolean(document.sriXml || document.sriAccessKey),
       productCount: document.lines.length,
       total: Number(document.total),
@@ -776,6 +800,63 @@ function validateSriCertificateFile(buffer) {
   }
 }
 
+function sriMessagesText(messages = []) {
+  if (!Array.isArray(messages) || !messages.length) {
+    return null;
+  }
+
+  return messages
+    .map((message) =>
+      [message.identificador, message.mensaje, message.informacionAdicional, message.tipo]
+        .filter(Boolean)
+        .join(" - ")
+    )
+    .join("\n");
+}
+
+function buildSriSubmission(document, options = {}) {
+  const xml = options.xml || document?.sriXml || "";
+  const status = options.status || document?.sriStatus || "PENDING";
+  const error = options.error || null;
+
+  return {
+    status,
+    error,
+    sentAt: options.sentAt || document?.sriSentAt || null,
+    environment: document?.company?.sriEnvironment === "PRODUCTION" ? "Produccion" : "Pruebas",
+    documentId: document?.id || null,
+    documentNumber: document?.documentNumber || null,
+    accessKey: document?.sriAccessKey || null,
+    company: document?.company?.tradeName || document?.company?.legalName || null,
+    ruc: document?.company?.ruc || null,
+    customer: document?.customer?.nombre || null,
+    customerIdentification: document?.customer?.identificacion || null,
+    productCount: Array.isArray(document?.lines) ? document.lines.length : 0,
+    total: Number(document?.total || 0),
+    signedXml: xml.includes("<Signature"),
+    xmlBytes: Buffer.byteLength(xml, "utf8"),
+    messages: options.messages || document?.sriMessages || []
+  };
+}
+
+async function throwSriSendError(document, message) {
+  if (document?.id) {
+    await prisma.sale
+      .update({
+        where: { id: document.id },
+        data: { sriError: message }
+      })
+      .catch(() => null);
+  }
+
+  throw badRequestWithDetails(message, {
+    sriSubmission: buildSriSubmission(document, {
+      status: "FAILED",
+      error: message
+    })
+  });
+}
+
 async function validateSriDocument(user, id) {
   const document = await prisma.sale.findFirst({
     where: scopedSaleWhere(user, { id }),
@@ -791,7 +872,20 @@ async function validateSriDocument(user, id) {
   }
 
   if (!document.sriXml || !document.sriAccessKey) {
-    throw badRequest("La factura no tiene XML generado para SRI");
+    const regenerated = buildSriInvoiceXml(document);
+    validateInvoiceXml(regenerated.xml);
+    await prisma.sale.update({
+      where: { id: document.id },
+      data: {
+        sriAccessKey: regenerated.accessKey,
+        sriUnsignedXml: regenerated.xml,
+        sriXml: regenerated.xml,
+        sriGeneratedAt: new Date()
+      }
+    });
+    document.sriXml = regenerated.xml;
+    document.sriUnsignedXml = regenerated.xml;
+    document.sriAccessKey = regenerated.accessKey;
   }
 
   if (!document.company?.proformaSignatureKey) {
@@ -803,7 +897,7 @@ async function validateSriDocument(user, id) {
   }
 
   if (!env.sriP12Password) {
-    throw badRequest("Configure la variable de entorno FirmaPrueba con la contrasena del archivo .p12");
+    throw badRequest("Configure SRI_P12_PASSWORD o FirmaPrueba con la contrasena del archivo .p12");
   }
 
   const certificate = await readStoredFile(document.company.proformaSignatureKey).catch(() => {
@@ -811,10 +905,24 @@ async function validateSriDocument(user, id) {
   });
   validateSriCertificateFile(certificate);
 
+  const unsignedXml = document.sriUnsignedXml || document.sriXml;
+  validateInvoiceXml(unsignedXml);
+
+  let signedXml;
+
+  try {
+    signedXml = signSriInvoiceXml(unsignedXml, certificate, env.sriP12Password);
+    validateInvoiceXml(signedXml);
+  } catch (error) {
+    throw badRequest(error.message || "No se pudo firmar el XML para SRI");
+  }
+
   const updatedDocument = await prisma.sale.update({
     where: { id: document.id },
     data: {
       sriStatus: "READY_TO_SEND",
+      sriXml: signedXml,
+      sriUnsignedXml: unsignedXml,
       sriError: null
     },
     select: documentSelect({ includeXml: true })
@@ -826,7 +934,7 @@ async function validateSriDocument(user, id) {
 async function sendSriDocument(user, id) {
   const document = await prisma.sale.findFirst({
     where: scopedSaleWhere(user, { id }),
-    select: documentSelect({ includeXml: true, includeCompanySignature: true })
+    select: documentSelect({ includeXml: true })
   });
 
   if (!document) {
@@ -834,41 +942,170 @@ async function sendSriDocument(user, id) {
   }
 
   if (document.documentType !== "INVOICE") {
-    throw badRequest("Solo las facturas se envian al SRI");
+    await throwSriSendError(document, "Solo las facturas se envian al SRI");
   }
 
-  if (document.sriStatus !== "READY_TO_SEND" && document.sriStatus !== "SENT") {
-    throw badRequest("Valide la factura para SRI antes de enviarla");
+  if (document.sriStatus !== "READY_TO_SEND") {
+    await throwSriSendError(document, "Valide la factura para SRI antes de enviarla");
   }
 
   if (!document.sriXml || !document.sriAccessKey) {
-    throw badRequest("La factura no tiene XML generado para SRI");
+    await throwSriSendError(document, "La factura no tiene XML generado para SRI");
   }
 
-  if (!document.company?.proformaSignatureKey) {
-    throw badRequest("Cargue el archivo .p12 en la configuracion de la empresa");
+  if (!document.sriXml.includes("<ds:Signature") && !document.sriXml.includes("<Signature")) {
+    await throwSriSendError(document, "El XML debe estar firmado antes de enviarlo al SRI");
   }
 
-  if (!env.sriP12Password) {
-    throw badRequest("Configure la variable de entorno FirmaPrueba con la contrasena del archivo .p12");
+  validateInvoiceXml(document.sriXml);
+
+  let reception;
+
+  try {
+    reception = await sendDocument(document.company, document.sriXml);
+  } catch (error) {
+    await throwSriSendError(document, error.message || "No se pudo enviar el XML al SRI");
   }
 
-  const certificate = await readStoredFile(document.company.proformaSignatureKey).catch(() => {
-    throw badRequest("No se encontro el archivo .p12 configurado para la empresa");
-  });
-  validateSriCertificateFile(certificate);
+  if (reception.estado === "DEVUELTA") {
+    const messages = reception.messages || [];
+    const errorText = sriMessagesText(messages) || "El SRI devolvio el comprobante";
+    const rejectedDocument = await prisma.sale.update({
+      where: { id: document.id },
+      data: {
+        sriStatus: "REJECTED",
+        sriReceptionResponse: reception.rawXml || null,
+        sriMessages: messages,
+        sriError: errorText
+      },
+      select: documentSelect({ includeXml: true })
+    });
 
-  const updatedDocument = await prisma.sale.update({
+    return {
+      document: mapDocument(rejectedDocument),
+      sriSubmission: buildSriSubmission(rejectedDocument, {
+        status: "REJECTED",
+        error: errorText,
+        messages
+      })
+    };
+  }
+
+  if (reception.estado !== "RECIBIDA") {
+    const messages = reception.messages || [];
+    await throwSriSendError(
+      document,
+      sriMessagesText(messages) || `Respuesta de recepcion SRI no reconocida: ${reception.estado || "sin estado"}`
+    );
+  }
+
+  const sentAt = new Date();
+  await prisma.sale.update({
     where: { id: document.id },
     data: {
       sriStatus: "SENT",
-      sriSentAt: new Date(),
+      sriSentAt: sentAt,
+      sriReceptionResponse: reception.rawXml || null,
+      sriMessages: reception.messages || [],
       sriError: null
+    }
+  });
+
+  return consultSriAuthorization(user, id, { sentAt });
+}
+
+function parseSriAuthorizationDate(value) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(String(value).replace(" ", "T"));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function consultSriAuthorization(user, id, options = {}) {
+  const document = await prisma.sale.findFirst({
+    where: scopedSaleWhere(user, { id }),
+    select: documentSelect({ includeXml: true })
+  });
+
+  if (!document) {
+    throw notFound("Documento no encontrado");
+  }
+
+  if (document.documentType !== "INVOICE") {
+    throw badRequest("Solo las facturas se consultan en el SRI");
+  }
+
+  if (!document.sriAccessKey || document.sriAccessKey.length !== 49) {
+    throw badRequest("La factura no tiene clave de acceso SRI valida");
+  }
+
+  let authorization;
+
+  try {
+    authorization = await queryAuthorization(document.company, document.sriAccessKey);
+  } catch (error) {
+    await throwSriSendError(document, error.message || "No se pudo consultar la autorizacion en el SRI");
+  }
+
+  const messages = authorization.messages || [];
+  const estado = authorization.estado;
+  const authorized = estado === "AUTORIZADO";
+  const rejected = estado === "NO AUTORIZADO";
+  const nextStatus = authorized ? "AUTHORIZED" : rejected ? "REJECTED" : "PROCESSING";
+  const errorText = rejected ? sriMessagesText(messages) || "Comprobante no autorizado por el SRI" : null;
+  const updatedDocument = await prisma.sale.update({
+    where: { id: document.id },
+    data: {
+      sriStatus: nextStatus,
+      sriAuthorizationNumber: authorized
+        ? authorization.numeroAutorizacion || document.sriAccessKey
+        : document.sriAuthorizationNumber,
+      sriAuthorizationDate: authorized
+        ? parseSriAuthorizationDate(authorization.fechaAutorizacion)
+        : document.sriAuthorizationDate,
+      sriAuthorizationXml: authorization.authorizationXml || document.sriAuthorizationXml,
+      sriMessages: messages,
+      sriError: errorText
     },
     select: documentSelect({ includeXml: true })
   });
 
-  return mapDocument(updatedDocument);
+  return {
+    document: mapDocument(updatedDocument),
+    sriSubmission: buildSriSubmission(updatedDocument, {
+      status: nextStatus,
+      sentAt: options.sentAt,
+      messages,
+      error: errorText
+    })
+  };
+}
+
+async function getRidePdf(user, id) {
+  const document = await prisma.sale.findFirst({
+    where: scopedSaleWhere(user, { id }),
+    select: documentSelect()
+  });
+
+  if (!document) {
+    throw notFound("Documento no encontrado");
+  }
+
+  if (document.documentType !== "INVOICE") {
+    throw badRequest("El RIDE PDF solo esta disponible para facturas");
+  }
+
+  if (document.sriStatus !== "AUTHORIZED") {
+    throw badRequest("El RIDE PDF solo se descarga cuando la factura esta AUTORIZADA por el SRI");
+  }
+
+  const pdf = await buildRidePdf(document);
+  return {
+    pdf,
+    fileName: `RIDE-${documentParts(document).number}.pdf`
+  };
 }
 
 async function createDocument(user, body = {}) {
@@ -1016,11 +1253,13 @@ async function createDocument(user, body = {}) {
 
     if (documentType === "INVOICE") {
       const sriInvoice = buildSriInvoiceXml(documentForXml);
+      validateInvoiceXml(sriInvoice.xml);
 
       return tx.sale.update({
         where: { id: created.id },
         data: {
           sriAccessKey: sriInvoice.accessKey,
+          sriUnsignedXml: sriInvoice.xml,
           sriXml: sriInvoice.xml,
           sriGeneratedAt: new Date(),
           sriStatus: "PENDING_REVIEW"
@@ -1041,6 +1280,11 @@ module.exports = {
   getDocument,
   validateSriDocument,
   sendSriDocument,
+  consultSriAuthorization,
+  getRidePdf,
   validateCreditNoteInvoice,
-  createDocument
+  createDocument,
+  _test: {
+    scopedSaleWhere
+  }
 };

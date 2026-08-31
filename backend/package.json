@@ -4,6 +4,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "nodemon index.js",
+    "test": "node --test",
     "start": "node index.js",
     "postinstall": "prisma generate --schema prisma/schema.prisma",
     "db:generate": "prisma generate --schema prisma/schema.prisma",
@@ -19,15 +20,22 @@
   "description": "Backend liviano del ERP con Express, Prisma y PostgreSQL",
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@xmldom/xmldom": "^0.9.12",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
-    "multer": "^2.0.2",
+    "libxmljs2": "^0.37.0",
     "morgan": "^1.12.0",
-    "sharp": "^0.34.5"
+    "multer": "^2.0.2",
+    "node-forge": "^1.4.0",
+    "pdfkit": "^0.20.2",
+    "sharp": "^0.34.5",
+    "soap": "^1.11.0",
+    "xml-crypto": "^6.1.2",
+    "xpath": "^0.0.34"
   },
   "devDependencies": {
     "nodemon": "^3.1.11",

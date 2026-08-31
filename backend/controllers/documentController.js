@@ -38,8 +38,28 @@ async function validarDocumentoSri(req, res, next) {
 
 async function enviarDocumentoSri(req, res, next) {
   try {
-    const document = await documentService.sendSriDocument(req.user, req.params.id);
-    return res.json({ document });
+    const result = await documentService.sendSriDocument(req.user, req.params.id);
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function consultarAutorizacionSri(req, res, next) {
+  try {
+    const result = await documentService.consultSriAuthorization(req.user, req.params.id);
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function descargarRidePdf(req, res, next) {
+  try {
+    const { pdf, fileName } = await documentService.getRidePdf(req.user, req.params.id);
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    return res.send(pdf);
   } catch (error) {
     return next(error);
   }
@@ -60,5 +80,7 @@ module.exports = {
   validarFacturaNotaCredito,
   validarDocumentoSri,
   enviarDocumentoSri,
+  consultarAutorizacionSri,
+  descargarRidePdf,
   crearDocumento
 };

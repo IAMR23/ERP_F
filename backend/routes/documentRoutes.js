@@ -1,6 +1,8 @@
 const express = require("express");
 const {
   crearDocumento,
+  consultarAutorizacionSri,
+  descargarRidePdf,
   enviarDocumentoSri,
   listarDocumentos,
   obtenerDocumento,
@@ -23,6 +25,18 @@ router.post(
   authMiddleware,
   requirePermission("sale.create"),
   enviarDocumentoSri
+);
+router.post(
+  "/api/v1/documents/:id/sri/authorization",
+  authMiddleware,
+  requirePermission("sale.create"),
+  consultarAutorizacionSri
+);
+router.get(
+  "/api/v1/documents/:id/ride",
+  authMiddleware,
+  requirePermission("sale.read"),
+  descargarRidePdf
 );
 router.post(
   "/api/v1/documents/credit-notes/validate",

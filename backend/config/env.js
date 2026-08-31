@@ -1,9 +1,9 @@
 const path = require("path");
 const dotenv = require("dotenv");
 
-dotenv.config({ path: path.resolve(__dirname, "../../.env") });
-dotenv.config({ path: path.resolve(__dirname, "../.env"), override: true });
-dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, "../../.env"), quiet: true });
+dotenv.config({ path: path.resolve(__dirname, "../.env"), override: true, quiet: true });
+dotenv.config({ quiet: true });
 
 const required = ["DATABASE_URL", "JWT_ACCESS_SECRET"];
 
@@ -23,5 +23,5 @@ module.exports = {
     .filter(Boolean),
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
   accessTokenTtl: process.env.ACCESS_TOKEN_TTL || "15m",
-  sriP12Password: process.env.FirmaPrueba || process.env.SRI_P12_PASSWORD || ""
+  sriP12Password: process.env.SRI_P12_PASSWORD || process.env.FirmaPrueba || ""
 };

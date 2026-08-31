@@ -1,4 +1,4 @@
-import { api } from "./api";
+import { API_URL, api, getSession } from "./api";
 
 function buildQuery(params = {}) {
   const searchParams = new URLSearchParams();
@@ -38,6 +38,30 @@ export function sendSriDocument(id) {
   return api(`/documents/${id}/sri/send`, {
     method: "POST"
   });
+}
+
+export function consultSriAuthorization(id) {
+  return api(`/documents/${id}/sri/authorization`, {
+    method: "POST"
+  });
+}
+
+export async function downloadRidePdf(id) {
+  const session = getSession();
+  const response = await fetch(`${API_URL}/documents/${id}/ride`, {
+    headers: {
+      ...(session?.accessToken ? { Authorization: `Bearer ${session.accessToken}` } : {})
+    }
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.message || "No se pudo descargar el RIDE PDF");
+  }
+
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const fileName = disposition.match(/filename="([^"]+)"/)?.[1] || "RIDE.pdf";
+  return { blob: await response.blob(), fileName };
 }
 
 export function createDocument(payload) {

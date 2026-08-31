@@ -107,7 +107,9 @@ async function ensureBranch(user, id, where = {}) {
   return branch;
 }
 
-function companySelect() {
+function companySelect(options = {}) {
+  const includeSignature = Boolean(options.includeSignature);
+
   return {
     id: true,
     legalName: true,
@@ -125,10 +127,14 @@ function companySelect() {
     exporterType: true,
     rimpe: true,
     withholdingAgent: true,
+    specialContributorResolution: true,
+    withholdingAgentResolution: true,
+    largeTaxpayerResolution: true,
+    sriSoftwareProviderRuc: true,
     city: true,
     decimalPlaces: true,
     notificationEmail: true,
-    proformaSignatureKey: true,
+    ...(includeSignature ? { proformaSignatureKey: true } : {}),
     quoteWarranty: true,
     quotePaymentMethod: true,
     status: true,
@@ -144,6 +150,18 @@ function companySelect() {
         catalogItems: true
       }
     }
+  };
+}
+
+function mapCompanySettings(company) {
+  if (!company) {
+    return company;
+  }
+
+  const { proformaSignatureKey, ...publicCompany } = company;
+  return {
+    ...publicCompany,
+    hasSriCertificate: Boolean(proformaSignatureKey)
   };
 }
 
@@ -259,9 +277,9 @@ async function ensureUniqueUserIdentity(tenantId, { email, username }, excludeId
 async function listCompanies(user) {
   return prisma.company.findMany({
     where: scopedCompanyWhere(user),
-    select: companySelect(),
+    select: companySelect({ includeSignature: true }),
     orderBy: [{ status: "asc" }, { tradeName: "asc" }]
-  });
+  }).then((companies) => companies.map(mapCompanySettings));
 }
 
 async function getCompanySettings(user, companyId) {
@@ -269,7 +287,7 @@ async function getCompanySettings(user, companyId) {
     ? await ensureCompany(user, companyId)
     : await prisma.company.findFirst({
         where: scopedCompanyWhere(user, { status: "ACTIVE" }),
-        select: companySelect(),
+        select: companySelect({ includeSignature: true }),
         orderBy: { createdAt: "asc" }
       });
 
@@ -277,7 +295,7 @@ async function getCompanySettings(user, companyId) {
     throw notFound("Empresa no encontrada");
   }
 
-  return company;
+  return mapCompanySettings(company);
 }
 
 async function listCompanyUsers(user) {
@@ -472,8 +490,8 @@ async function createCompany(user, body) {
       timezone: trimOrEmpty(body.timezone) || "America/Guayaquil",
       createdBy: user.id
     },
-    select: companySelect()
-  });
+    select: companySelect({ includeSignature: true })
+  }).then(mapCompanySettings);
 }
 
 async function updateCompany(user, id, body) {
@@ -512,8 +530,36 @@ async function updateCompany(user, id, body) {
   return prisma.company.update({
     where: { id },
     data,
-    select: companySelect()
-  });
+    select: companySelect({ includeSignature: true })
+  }).then(mapCompanySettings);
+}
+
+function normalizeResolution(value, field, pattern = /^[A-Za-z0-9-]{3,20}$/) {
+  const resolution = trimOrEmpty(value);
+
+  if (value !== undefined && resolution && !pattern.test(resolution)) {
+    throw badRequest(`${field} tiene un formato invalido`);
+  }
+
+  return value === undefined ? undefined : resolution;
+}
+
+function normalizeSriProviderRuc(value) {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  const ruc = trimOrEmpty(value).replace(/\D/g, "");
+
+  if (!ruc) {
+    return "";
+  }
+
+  if (!/^\d{10}001$/.test(ruc)) {
+    throw badRequest("El RUC del proveedor del sistema debe tener 13 digitos y terminar en 001");
+  }
+
+  return ruc;
 }
 
 async function updateCompanySettings(user, id, body, files = {}) {
@@ -540,6 +586,21 @@ async function updateCompanySettings(user, id, body, files = {}) {
         : undefined,
     rimpe: optionalBoolean(body.rimpe),
     withholdingAgent: optionalBoolean(body.withholdingAgent),
+    specialContributorResolution: normalizeResolution(
+      body.specialContributorResolution,
+      "La resolucion de contribuyente especial",
+      /^[A-Za-z0-9]{3,13}$/
+    ),
+    withholdingAgentResolution: normalizeResolution(
+      body.withholdingAgentResolution,
+      "La resolucion de agente de retencion",
+      /^[0-9]{1,8}$/
+    ),
+    largeTaxpayerResolution: normalizeResolution(
+      body.largeTaxpayerResolution,
+      "La resolucion de gran contribuyente"
+    ),
+    sriSoftwareProviderRuc: normalizeSriProviderRuc(body.sriSoftwareProviderRuc),
     city: optionalString(body.city),
     phone: optionalString(body.phone),
     mainAddress: optionalString(body.mainAddress),
@@ -569,7 +630,7 @@ async function updateCompanySettings(user, id, body, files = {}) {
   const updatedCompany = await prisma.company.update({
     where: { id: company.id },
     data,
-    select: companySelect()
+    select: companySelect({ includeSignature: true })
   });
 
   if (logo && company.logoObjectKey) {
@@ -580,7 +641,7 @@ async function updateCompanySettings(user, id, body, files = {}) {
     await removeStoredImage(company.proformaSignatureKey);
   }
 
-  return updatedCompany;
+  return mapCompanySettings(updatedCompany);
 }
 
 async function disableCompany(user, id) {
@@ -589,8 +650,8 @@ async function disableCompany(user, id) {
   return prisma.company.update({
     where: { id },
     data: { status: "INACTIVE" },
-    select: companySelect()
-  });
+    select: companySelect({ includeSignature: true })
+  }).then(mapCompanySettings);
 }
 
 async function listBranches(user, companyId) {

@@ -14,7 +14,14 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import InvoicePrintSheet, { printInvoiceDocument } from "../components/InvoicePrintSheet";
-import { getDocument, getDocuments, sendSriDocument, validateSriDocument } from "../services/documentService";
+import {
+  consultSriAuthorization,
+  downloadRidePdf,
+  getDocument,
+  getDocuments,
+  sendSriDocument,
+  validateSriDocument
+} from "../services/documentService";
 
 const inputClass =
   "h-10 w-full rounded-lg border border-line bg-white px-3 text-sm text-ink outline-none focus:border-brand focus:ring-2 focus:ring-brand/15";
@@ -63,6 +70,7 @@ function sriStatusLabel(status) {
   if (status === "PENDING_REVIEW") return "Pendiente de revision";
   if (status === "READY_TO_SEND") return "Listo para enviar";
   if (status === "SENT") return "Enviado";
+  if (status === "PROCESSING") return "Procesando";
   if (status === "AUTHORIZED") return "Autorizado";
   if (status === "REJECTED") return "Rechazado";
   return "No aplica";
@@ -72,7 +80,7 @@ function sriStatusClass(status) {
   if (status === "AUTHORIZED") return "bg-emerald-100 text-emerald-700";
   if (status === "REJECTED") return "bg-red-100 text-red-700";
   if (status === "PENDING_REVIEW" || status === "READY_TO_SEND") return "bg-amber-100 text-amber-700";
-  if (status === "SENT") return "bg-sky-100 text-sky-700";
+  if (status === "SENT" || status === "PROCESSING") return "bg-sky-100 text-sky-700";
   return "bg-slate-100 text-slate-700";
 }
 
@@ -80,20 +88,81 @@ function dateTimeText(value) {
   return value ? new Date(value).toLocaleString("es-EC") : "-";
 }
 
+function sriEnvironmentLabel(value) {
+  return value === "PRODUCTION" || value === "Produccion" ? "Produccion" : "Pruebas";
+}
+
+function sriSubmissionFromDocument(document) {
+  const review = document.sriReview || {};
+
+  if (!review.sentAt && !review.error) {
+    return null;
+  }
+
+  return {
+    status: review.status || document.sriStatus,
+    error: review.error || document.sriError || null,
+    sentAt: review.sentAt || document.sriSentAt || null,
+    environment: sriEnvironmentLabel(document.company?.sriEnvironment),
+    documentNumber: document.documentNumber,
+    accessKey: review.accessKey || document.sriAccessKey,
+    company: document.company?.tradeName || document.company?.legalName,
+    ruc: document.company?.ruc,
+    customer: document.customer?.nombre,
+    customerIdentification: document.customer?.identificacion,
+    productCount: review.productCount || document.lines.length,
+    total: review.total || document.total,
+    signedXml: document.sriXml ? document.sriXml.includes("<Signature") || document.sriXml.includes("<ds:Signature") : false,
+    xmlBytes: document.sriXml ? new Blob([document.sriXml]).size : 0,
+    messages: review.messages || []
+  };
+}
+
+function sriSubmissionSummary(submission) {
+  if (!submission) {
+    return "-";
+  }
+
+  return [
+    submission.documentNumber ? `Factura ${submission.documentNumber}` : null,
+    submission.accessKey ? `clave ${submission.accessKey}` : null,
+    submission.environment ? `ambiente ${submission.environment}` : null,
+    submission.signedXml ? "XML firmado" : "XML sin firma",
+    `${submission.productCount || 0} producto(s)`,
+    `$${money(submission.total)}`,
+    submission.xmlBytes ? `XML ${submission.xmlBytes} bytes` : null
+  ]
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function errorDetailLines(error) {
+  const details = error?.details;
+
+  if (!details) {
+    return [];
+  }
+
+  if (Array.isArray(details)) {
+    return details;
+  }
+
+  if (Array.isArray(details.sriSubmission?.messages)) {
+    return details.sriSubmission.messages.map((message) =>
+      [message.identificador, message.mensaje, message.informacionAdicional, message.tipo]
+        .filter(Boolean)
+        .join(" - ")
+    );
+  }
+
+  return [];
+}
+
 function safeFileName(value, fallback = "documento") {
   return String(value || fallback)
     .trim()
     .replace(/[^\w.-]+/g, "-")
     .replace(/^-+|-+$/g, "") || fallback;
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
 }
 
 function downloadTextFile(content, fileName, type) {
@@ -109,96 +178,16 @@ function downloadTextFile(content, fileName, type) {
   URL.revokeObjectURL(url);
 }
 
-function buildRideHtml(document) {
-  const company = document.company || {};
-  const customer = document.customer || {};
-  const payment = document.payments?.[0];
-  const rows = (document.lines || [])
-    .map(
-      (line) => `
-        <tr>
-          <td>${escapeHtml(line.catalogItem?.internalCode || "-")}</td>
-          <td class="right">${money(line.quantity)}</td>
-          <td>${escapeHtml(line.catalogItem?.name || "Producto")}</td>
-          <td class="right">$${money(line.unitPrice)}</td>
-          <td class="right">$${money(line.discountAmount)}</td>
-          <td class="right">$${money(line.taxAmount)}</td>
-          <td class="right">$${money(line.lineTotal)}</td>
-        </tr>`
-    )
-    .join("");
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
 
-  return `<!doctype html>
-<html lang="es">
-<head>
-  <meta charset="utf-8" />
-  <title>RIDE ${escapeHtml(document.documentNumber || "")}</title>
-  <style>
-    body { font-family: Arial, sans-serif; color: #111827; margin: 24px; }
-    h1 { font-size: 18px; margin: 0 0 8px; }
-    h2 { font-size: 14px; margin: 18px 0 8px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .box { background: #f3f4f6; padding: 12px; }
-    .muted { color: #4b5563; font-size: 12px; }
-    table { border-collapse: collapse; width: 100%; margin-top: 10px; font-size: 12px; }
-    th, td { border: 1px solid #d1d5db; padding: 7px; vertical-align: top; }
-    th { background: #e5e7eb; text-align: left; }
-    .right { text-align: right; }
-    .totals { margin-left: auto; width: 320px; }
-    @media print { body { margin: 0; } }
-  </style>
-</head>
-<body>
-  <div class="grid">
-    <section class="box">
-      <h1>${escapeHtml(documentTypes[document.documentType] || "Documento")}</h1>
-      <p><strong>Documento:</strong> ${escapeHtml(document.documentNumber || "-")}</p>
-      <p><strong>Emision:</strong> ${escapeHtml(dateText(document.issueDate))}</p>
-      <p><strong>Clave de acceso:</strong> ${escapeHtml(document.sriAccessKey || "-")}</p>
-      <p><strong>Estado SRI:</strong> ${escapeHtml(sriStatusLabel(document.sriStatus))}</p>
-    </section>
-    <section class="box">
-      <p><strong>Emisor:</strong> ${escapeHtml(company.legalName || company.tradeName || "-")}</p>
-      <p><strong>RUC:</strong> ${escapeHtml(company.ruc || "-")}</p>
-      <p><strong>Direccion:</strong> ${escapeHtml(company.mainAddress || "-")}</p>
-      <p><strong>Correo:</strong> ${escapeHtml(company.email || "-")}</p>
-    </section>
-  </div>
-  <section class="box" style="margin-top:16px">
-    <p><strong>Cliente:</strong> ${escapeHtml(customer.nombre || "-")}</p>
-    <p><strong>RUC/CI:</strong> ${escapeHtml(customer.identificacion || "-")}</p>
-    <p><strong>Direccion:</strong> ${escapeHtml(customer.direccion || "-")}</p>
-    <p><strong>Forma de pago:</strong> ${escapeHtml(payment?.paymentMethod?.name || "Sin forma de pago")}</p>
-  </section>
-  <h2>Detalle</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Codigo</th>
-        <th>Cantidad</th>
-        <th>Descripcion</th>
-        <th>Precio</th>
-        <th>Descuento</th>
-        <th>IVA</th>
-        <th>Total</th>
-      </tr>
-    </thead>
-    <tbody>${rows}</tbody>
-  </table>
-  <section class="totals">
-    <table>
-      <tbody>
-        <tr><th>Subtotal</th><td class="right">$${money(document.taxableSubtotal)}</td></tr>
-        <tr><th>Descuento</th><td class="right">$${money(document.discountTotal)}</td></tr>
-        <tr><th>IVA</th><td class="right">$${money(document.taxTotal)}</td></tr>
-        <tr><th>Retenciones</th><td class="right">$${money(document.retentionTotal)}</td></tr>
-        <tr><th>Total</th><td class="right"><strong>$${money(document.total)}</strong></td></tr>
-      </tbody>
-    </table>
-  </section>
-  <p class="muted">RIDE generado desde ERP.</p>
-</body>
-</html>`;
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export default function DocumentsPage() {
@@ -608,10 +597,16 @@ function Field({ label, children }) {
 function DocumentPreview({ document, onClose, onValidated }) {
   const [copyState, setCopyState] = useState("");
   const [sriActionError, setSriActionError] = useState("");
+  const [sriActionErrorDetails, setSriActionErrorDetails] = useState([]);
   const [sriActionNotice, setSriActionNotice] = useState("");
+  const [lastSriSubmission, setLastSriSubmission] = useState(null);
   const [validatingSri, setValidatingSri] = useState(false);
   const [sendingSri, setSendingSri] = useState(false);
+  const [consultingSri, setConsultingSri] = useState(false);
+  const [downloadingRide, setDownloadingRide] = useState(false);
   const isInvoice = document.documentType === "INVOICE";
+  const activeSriSubmission = lastSriSubmission || sriSubmissionFromDocument(document);
+  const hasSignedXml = Boolean(document.sriXml?.includes("<ds:Signature") || document.sriXml?.includes("<Signature"));
 
   async function copyXml() {
     if (!document.sriXml) {
@@ -629,7 +624,9 @@ function DocumentPreview({ document, onClose, onValidated }) {
   async function validateSri() {
     setValidatingSri(true);
     setSriActionError("");
+    setSriActionErrorDetails([]);
     setSriActionNotice("");
+    setLastSriSubmission(null);
 
     try {
       const response = await validateSriDocument(document.id);
@@ -637,6 +634,7 @@ function DocumentPreview({ document, onClose, onValidated }) {
       setSriActionNotice("Certificado y XML validados");
     } catch (apiError) {
       setSriActionError(apiError.message);
+      setSriActionErrorDetails(errorDetailLines(apiError));
     } finally {
       setValidatingSri(false);
     }
@@ -645,21 +643,55 @@ function DocumentPreview({ document, onClose, onValidated }) {
   async function sendSri() {
     setSendingSri(true);
     setSriActionError("");
+    setSriActionErrorDetails([]);
     setSriActionNotice("");
+    setLastSriSubmission(null);
 
     try {
       const response = await sendSriDocument(document.id);
-      onValidated(response.document, `Factura ${response.document.documentNumber || ""} enviada al SRI`);
-      setSriActionNotice("Documento enviado al SRI");
+      const sriSubmission = response.sriSubmission || sriSubmissionFromDocument(response.document);
+
+      setLastSriSubmission(sriSubmission);
+      onValidated(response.document, `Factura ${response.document.documentNumber || ""} actualizada con respuesta SRI`);
+      setSriActionNotice("Respuesta SRI registrada. Revisa el detalle abajo.");
     } catch (apiError) {
-      setSriActionError(apiError.message);
+      const sriSubmission = apiError.details?.sriSubmission || null;
+
+      setLastSriSubmission(sriSubmission);
+      setSriActionError(sriSubmission?.error || apiError.message);
+      setSriActionErrorDetails(errorDetailLines(apiError));
     } finally {
       setSendingSri(false);
     }
   }
 
+  async function consultAuthorization() {
+    setConsultingSri(true);
+    setSriActionError("");
+    setSriActionErrorDetails([]);
+    setSriActionNotice("");
+    setLastSriSubmission(null);
+
+    try {
+      const response = await consultSriAuthorization(document.id);
+      const sriSubmission = response.sriSubmission || sriSubmissionFromDocument(response.document);
+
+      setLastSriSubmission(sriSubmission);
+      onValidated(response.document, `Factura ${response.document.documentNumber || ""} consultada en SRI`);
+      setSriActionNotice("Consulta de autorizacion registrada.");
+    } catch (apiError) {
+      const sriSubmission = apiError.details?.sriSubmission || null;
+
+      setLastSriSubmission(sriSubmission);
+      setSriActionError(sriSubmission?.error || apiError.message);
+      setSriActionErrorDetails(errorDetailLines(apiError));
+    } finally {
+      setConsultingSri(false);
+    }
+  }
+
   function downloadXml() {
-    if (!document.sriXml) {
+    if (!document.sriXml || !hasSignedXml) {
       return;
     }
 
@@ -670,12 +702,20 @@ function DocumentPreview({ document, onClose, onValidated }) {
     );
   }
 
-  function downloadRide() {
-    downloadTextFile(
-      buildRideHtml(document),
-      `RIDE-${safeFileName(document.documentNumber, "factura")}.html`,
-      "text/html;charset=utf-8"
-    );
+  async function downloadRide() {
+    setDownloadingRide(true);
+    setSriActionError("");
+    setSriActionErrorDetails([]);
+
+    try {
+      const { blob, fileName } = await downloadRidePdf(document.id);
+      downloadBlob(blob, fileName);
+    } catch (apiError) {
+      setSriActionError(apiError.message);
+      setSriActionErrorDetails(errorDetailLines(apiError));
+    } finally {
+      setDownloadingRide(false);
+    }
   }
 
   return (
@@ -776,7 +816,7 @@ function DocumentPreview({ document, onClose, onValidated }) {
                 </button>
                 <button
                   className={iconButtonClass}
-                  disabled={!document.sriXml}
+                  disabled={!document.sriXml || !hasSignedXml}
                   onClick={downloadXml}
                   type="button"
                 >
@@ -801,14 +841,72 @@ function DocumentPreview({ document, onClose, onValidated }) {
                   <Send size={16} aria-hidden="true" />
                   {sendingSri ? "Enviando..." : "Enviar al SRI"}
                 </button>
-                <button className={iconButtonClass} onClick={downloadRide} type="button">
+                <button
+                  className={iconButtonClass}
+                  disabled={consultingSri || !["SENT", "PROCESSING"].includes(document.sriStatus)}
+                  onClick={consultAuthorization}
+                  type="button"
+                >
+                  <RefreshCw size={16} aria-hidden="true" />
+                  <span className="ml-2">{consultingSri ? "Consultando..." : "Consultar autorizacion"}</span>
+                </button>
+                <button
+                  className={iconButtonClass}
+                  disabled={downloadingRide || document.sriStatus !== "AUTHORIZED"}
+                  onClick={downloadRide}
+                  type="button"
+                >
                   <Download size={16} aria-hidden="true" />
-                  <span className="ml-2">Descargar RIDE</span>
+                  <span className="ml-2">{downloadingRide ? "Descargando..." : "Descargar RIDE PDF"}</span>
                 </button>
                 {copyState ? <span className="self-center text-sm text-amber-800">{copyState}</span> : null}
                 {sriActionNotice ? <span className="self-center text-sm text-emerald-700">{sriActionNotice}</span> : null}
                 {sriActionError ? <span className="self-center text-sm text-red-700">{sriActionError}</span> : null}
               </div>
+              {sriActionErrorDetails.length ? (
+                <div className="border-t border-amber-200 px-4 py-3">
+                  <p className="text-xs uppercase text-red-700">Detalle tecnico</p>
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-red-700">
+                    {sriActionErrorDetails.map((detail, index) => (
+                      <li key={`${detail}-${index}`}>{detail}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {activeSriSubmission ? (
+                <div className="grid gap-3 border-t border-amber-200 px-4 py-3 text-sm md:grid-cols-2">
+                  <div className="md:col-span-2">
+                    <p className="text-xs uppercase text-amber-700">Que se envio</p>
+                    <p className="break-words font-medium text-ink">
+                      {sriSubmissionSummary(activeSriSubmission)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase text-amber-700">Fecha de envio</p>
+                    <p className="font-semibold text-ink">{dateTimeText(activeSriSubmission.sentAt)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase text-amber-700">Error SRI</p>
+                    <p className={`font-semibold ${activeSriSubmission.error ? "text-red-700" : "text-emerald-700"}`}>
+                      {activeSriSubmission.error || "Sin error registrado"}
+                    </p>
+                  </div>
+                  {activeSriSubmission.messages?.length ? (
+                    <div className="md:col-span-2">
+                      <p className="text-xs uppercase text-amber-700">Mensajes SRI</p>
+                      <div className="mt-1 space-y-2 rounded-lg border border-amber-200 bg-white p-3">
+                        {activeSriSubmission.messages.map((message, index) => (
+                          <p className="text-sm text-ink" key={`${message.identificador || "msg"}-${index}`}>
+                            <span className="font-semibold">{message.identificador || message.tipo || "SRI"}:</span>{" "}
+                            {[message.mensaje, message.informacionAdicional].filter(Boolean).join(" - ")}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </section>
           ) : null}
 

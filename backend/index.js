@@ -52,7 +52,8 @@ app.use(helmet());
 app.use(express.json({ limit: "1mb" }));
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+app.use("/uploads/products", express.static(path.join(__dirname, "uploads", "products")));
+app.use("/uploads/companies", express.static(path.join(__dirname, "uploads", "companies")));
 
 app.use(authRoutes);
 app.use(dashboardRoutes);
@@ -72,14 +73,19 @@ app.use((req, res) => {
 
 app.use((error, req, res, next) => {
   const statusCode = error.statusCode || 500;
+  const payload = {
+    message: statusCode >= 500 ? "Error interno" : error.message
+  };
 
   if (statusCode >= 500) {
     console.error(error);
   }
 
-  res.status(statusCode).json({
-    message: statusCode >= 500 ? "Error interno" : error.message
-  });
+  if (statusCode < 500 && error.details) {
+    payload.details = error.details;
+  }
+
+  res.status(statusCode).json(payload);
 });
 
 conectarDB()

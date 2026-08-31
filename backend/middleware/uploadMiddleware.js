@@ -37,7 +37,7 @@ const companySettingsUpload = multer({
 
     if (file.fieldname === "proformaSignature") {
       if (path.extname(file.originalname || "").toLowerCase() !== ".p12") {
-        return callback(uploadError("La firma de proforma debe ser un archivo con extension .p12"));
+        return callback(uploadError("El certificado SRI debe ser un archivo con extension .p12"));
       }
 
       return callback(null, true);

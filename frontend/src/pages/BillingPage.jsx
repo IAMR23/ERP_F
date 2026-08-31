@@ -159,11 +159,6 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
     );
   }, [clientSearch, clients]);
 
-  const selectedBranch = useMemo(
-    () => branches.find((branch) => branch.id === documentForm.branchId),
-    [branches, documentForm.branchId]
-  );
-
   const availableWarehouses = useMemo(
     () => warehouses.filter((warehouse) => warehouse.branch?.id === documentForm.branchId),
     [documentForm.branchId, warehouses]

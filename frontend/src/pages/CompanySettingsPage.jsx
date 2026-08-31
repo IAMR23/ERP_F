@@ -23,13 +23,17 @@ const emptyForm = {
   exporterType: "NO_HABITUAL",
   rimpe: false,
   withholdingAgent: false,
+  specialContributorResolution: "",
+  withholdingAgentResolution: "",
+  largeTaxpayerResolution: "",
+  sriSoftwareProviderRuc: "",
   city: "",
   phone: "",
   mainAddress: "",
   decimalPlaces: "2",
   notificationEmail: "",
   logoObjectKey: "",
-  proformaSignatureKey: "",
+  hasSriCertificate: false,
   quoteWarranty: "",
   quotePaymentMethod: "",
   logo: null,
@@ -112,13 +116,17 @@ export default function CompanySettingsPage({ onBack }) {
         exporterType: company.exporterType || "NO_HABITUAL",
         rimpe: Boolean(company.rimpe),
         withholdingAgent: Boolean(company.withholdingAgent),
+        specialContributorResolution: company.specialContributorResolution || "",
+        withholdingAgentResolution: company.withholdingAgentResolution || "",
+        largeTaxpayerResolution: company.largeTaxpayerResolution || "",
+        sriSoftwareProviderRuc: company.sriSoftwareProviderRuc || "",
         city: company.city || "",
         phone: company.phone || "",
         mainAddress: company.mainAddress || "",
         decimalPlaces: String(company.decimalPlaces ?? 2),
         notificationEmail: company.notificationEmail || "",
         logoObjectKey: company.logoObjectKey || "",
-        proformaSignatureKey: company.proformaSignatureKey || "",
+        hasSriCertificate: Boolean(company.hasSriCertificate),
         quoteWarranty: company.quoteWarranty || "",
         quotePaymentMethod: company.quotePaymentMethod || ""
       });
@@ -263,7 +271,7 @@ export default function CompanySettingsPage({ onBack }) {
     }
 
     if (form.proformaSignature && !hasFileExtension(form.proformaSignature, ".p12")) {
-      setError("La firma de proforma debe ser un archivo con extension .p12");
+      setError("El certificado SRI debe ser un archivo con extension .p12");
       return;
     }
 
@@ -283,6 +291,10 @@ export default function CompanySettingsPage({ onBack }) {
         "mainAddress",
         "decimalPlaces",
         "notificationEmail",
+        "specialContributorResolution",
+        "withholdingAgentResolution",
+        "largeTaxpayerResolution",
+        "sriSoftwareProviderRuc",
         "quotePaymentMethod"
       ].forEach((field) => formData.append(field, form[field]));
 
@@ -305,7 +317,7 @@ export default function CompanySettingsPage({ onBack }) {
         logo: null,
         proformaSignature: null,
         logoObjectKey: company.logoObjectKey || "",
-        proformaSignatureKey: company.proformaSignatureKey || ""
+        hasSriCertificate: Boolean(company.hasSriCertificate)
       }));
       setNotice("Configuracion guardada");
     } catch (apiError) {
@@ -435,10 +447,24 @@ export default function CompanySettingsPage({ onBack }) {
                   onChange={(value) => updateField("specialContributor", value)}
                 />
               </SettingRow>
+              <SettingRow label="Resolucion contribuyente especial">
+                <input
+                  className={`${inputClass} max-w-xs`}
+                  onChange={(event) => updateField("specialContributorResolution", event.target.value)}
+                  value={form.specialContributorResolution}
+                />
+              </SettingRow>
               <SettingRow label="Gran Contribuyente">
                 <Checkbox
                   checked={form.largeTaxpayer}
                   onChange={(value) => updateField("largeTaxpayer", value)}
+                />
+              </SettingRow>
+              <SettingRow label="Resolucion gran contribuyente">
+                <input
+                  className={`${inputClass} max-w-xs`}
+                  onChange={(event) => updateField("largeTaxpayerResolution", event.target.value)}
+                  value={form.largeTaxpayerResolution}
                 />
               </SettingRow>
               <SettingRow label="Exportador">
@@ -474,6 +500,21 @@ export default function CompanySettingsPage({ onBack }) {
                 <Checkbox
                   checked={form.withholdingAgent}
                   onChange={(value) => updateField("withholdingAgent", value)}
+                />
+              </SettingRow>
+              <SettingRow label="Resolucion agente de retencion">
+                <input
+                  className={`${inputClass} max-w-xs`}
+                  onChange={(event) => updateField("withholdingAgentResolution", event.target.value)}
+                  value={form.withholdingAgentResolution}
+                />
+              </SettingRow>
+              <SettingRow label="RUC proveedor sistema">
+                <input
+                  className={`${inputClass} max-w-xs`}
+                  inputMode="numeric"
+                  onChange={(event) => updateField("sriSoftwareProviderRuc", event.target.value)}
+                  value={form.sriSoftwareProviderRuc}
                 />
               </SettingRow>
               <SettingRow label="Ciudad">
@@ -540,34 +581,22 @@ export default function CompanySettingsPage({ onBack }) {
                 />
               </SettingRow>
               <SettingRow
-                action={
-                  <button
-                    className={iconButtonClass}
-                    disabled={!form.proformaSignatureKey}
-                    onClick={() => openStoredImage(form.proformaSignatureKey)}
-                    title="Ver firma"
-                    type="button"
-                  >
-                    <Eye size={16} aria-hidden="true" />
-                  </button>
-                }
-                label="Firma Proforma"
-                note="Formato permitido: p12."
+                label="Certificado de firma electronica SRI (.p12)"
+                note={form.hasSriCertificate ? "Certificado cargado. Formato permitido: p12." : "Formato permitido: p12."}
               >
                 <FilePicker
                   accept=".p12"
                   allowedExtensions={[".p12"]}
-                  emptyLabel="Archivo no seleccionado"
+                  emptyLabel={form.hasSriCertificate ? "Certificado cargado" : "Archivo no seleccionado"}
                   file={form.proformaSignature}
-                  objectKey={form.proformaSignatureKey}
                   onChange={(file) => {
                     updateField("proformaSignature", file);
                     if (file) setError("");
                   }}
-                  onInvalid={() => setError("La firma de proforma debe ser un archivo con extension .p12")}
+                  onInvalid={() => setError("El certificado SRI debe ser un archivo con extension .p12")}
                 />
               </SettingRow>
-              <SettingRow label="Contrasena" note="Variable de entorno: FirmaPrueba">
+              <SettingRow label="Contrasena" note="Variable de entorno: SRI_P12_PASSWORD">
                 <input
                   className={`${inputClass} max-w-xl bg-slate-50 text-slate-500`}
                   disabled
