@@ -504,7 +504,7 @@ function BranchesSection(props) {
                 required
               />
             </Field>
-            <Field label="Establecimiento SRI">
+            <Field label="Punto Emision SRI">
               <Input
                 value={props.form.sriEstablishmentCode}
                 onChange={(event) => props.onChange("sriEstablishmentCode", event.target.value)}

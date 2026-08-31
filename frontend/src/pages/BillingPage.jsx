@@ -60,8 +60,16 @@ function todayInputValue() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function sriCode(value, fallback = "001") {
+  return String(value || fallback).trim().padStart(3, "0");
+}
+
+function branchEmissionPoint(branch, fallback = "001") {
+  return sriCode(branch?.sriEstablishmentCode, fallback);
+}
+
 function nextDocumentNumber(establishmentCode = "001", emissionPoint = "001") {
-  return `${establishmentCode || "001"}-${emissionPoint || "001"}-000000001`;
+  return `${sriCode(establishmentCode)}-${sriCode(emissionPoint)}-000000001`;
 }
 
 function isClient(person) {
@@ -242,8 +250,10 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
       setPaymentMethods(nextPaymentMethods);
       setDocumentForm((current) => {
         const branch = nextBranches.find((item) => item.id === current.branchId) || firstBranch;
-        const establishmentCode = branch?.sriEstablishmentCode || current.establishmentCode || "001";
-        const emissionPoint = current.emissionPoint || "001";
+        const currentAutoNumber = nextDocumentNumber(current.establishmentCode, current.emissionPoint);
+        const establishmentCode = sriCode(current.establishmentCode);
+        const emissionPoint = branchEmissionPoint(branch, current.emissionPoint);
+        const shouldRefreshNumber = !current.documentNumber || current.documentNumber === currentAutoNumber;
         const defaultWarehouse = findDefaultWarehouse(nextWarehouses, branch?.id);
         const currentPaymentMethod = nextPaymentMethods.find(
           (paymentMethod) => paymentMethod.id === current.paymentMethodId
@@ -258,7 +268,9 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
           branchId: current.branchId || branch?.id || "",
           establishmentCode,
           emissionPoint,
-          documentNumber: current.documentNumber || nextDocumentNumber(establishmentCode, emissionPoint),
+          documentNumber: shouldRefreshNumber
+            ? nextDocumentNumber(establishmentCode, emissionPoint)
+            : current.documentNumber,
           personId: current.personId || findDefaultClient(nextPeople)?.id || nextPeople.find(isClient)?.id || "",
           paymentMethodId: isProformaMode ? "" : currentPaymentMethod?.id || ""
         };
@@ -287,7 +299,8 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
       if (field === "branchId") {
         const branch = branches.find((item) => item.id === value);
         const defaultWarehouse = findDefaultWarehouse(warehouses, value);
-        next.establishmentCode = branch?.sriEstablishmentCode || "001";
+        next.establishmentCode = "001";
+        next.emissionPoint = branchEmissionPoint(branch, next.emissionPoint);
         next.documentNumber = nextDocumentNumber(next.establishmentCode, next.emissionPoint);
         setProductForm((currentProductForm) => ({
           ...currentProductForm,
@@ -611,7 +624,7 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
           </div>
 
           <div>
-            <Field label="Establecimiento">
+            <Field label="Sucursal">
               <select
                 className={inputClass}
                 value={documentForm.branchId}
@@ -628,7 +641,7 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
           </div>
 
           <div>
-            <Field label="P. Emision">
+            <Field label="Punto Emision">
               <input
                 className={inputClass}
                 maxLength={3}

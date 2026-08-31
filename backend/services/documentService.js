@@ -258,7 +258,10 @@ function normalizeDocumentType(documentType) {
 
 async function ensureWarehouse(user, warehouseId) {
   const warehouse = await prisma.warehouse.findFirst({
-    where: scopedWarehouseWhere(user, { id: warehouseId, status: "ACTIVE" })
+    where: scopedWarehouseWhere(user, { id: warehouseId, status: "ACTIVE" }),
+    include: {
+      branch: { select: { sriEstablishmentCode: true } }
+    }
   });
 
   if (!warehouse) {
@@ -266,6 +269,32 @@ async function ensureWarehouse(user, warehouseId) {
   }
 
   return warehouse;
+}
+
+function sriCode(value, fallback = "001") {
+  return String(value || fallback).trim().padStart(3, "0");
+}
+
+function resolveSriNumbering(body, warehouse) {
+  const branchEmissionPoint = sriCode(warehouse.branch?.sriEstablishmentCode);
+  const requestedEstablishment = sriCode(body.establishmentCode);
+  const requestedEmissionPoint = sriCode(body.emissionPoint, branchEmissionPoint);
+
+  if (
+    branchEmissionPoint !== "001" &&
+    requestedEstablishment === branchEmissionPoint &&
+    requestedEmissionPoint === "001"
+  ) {
+    return {
+      establishmentCode: "001",
+      emissionPoint: branchEmissionPoint
+    };
+  }
+
+  return {
+    establishmentCode: requestedEstablishment,
+    emissionPoint: requestedEmissionPoint
+  };
 }
 
 async function ensureCustomer(user, customerId, companyId) {
@@ -1165,8 +1194,7 @@ async function createDocument(user, body = {}) {
   const taxTotal = lines.reduce((sum, line) => sum + line.taxAmount, 0);
   const total = lines.reduce((sum, line) => sum + line.lineTotal, 0);
   const issueDate = parseDate(body.issueDate, "Fecha de emision") || new Date();
-  const establishmentCode = String(body.establishmentCode || "001").trim() || "001";
-  const emissionPoint = String(body.emissionPoint || "001").trim() || "001";
+  const { establishmentCode, emissionPoint } = resolveSriNumbering(body, warehouse);
 
   const sale = await prisma.$transaction(async (tx) => {
     const numbering = await getNextDocumentNumber(tx, {
@@ -1285,6 +1313,7 @@ module.exports = {
   validateCreditNoteInvoice,
   createDocument,
   _test: {
+    resolveSriNumbering,
     scopedSaleWhere
   }
 };
