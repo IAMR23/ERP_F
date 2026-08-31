@@ -1,0 +1,935 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EntityStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum CatalogType {
+  PRODUCT
+  SERVICE
+}
+
+enum AuditAction {
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  COMPANY_CREATED
+  COMPANY_UPDATED
+  COMPANY_DISABLED
+  BRANCH_CREATED
+  BRANCH_UPDATED
+  BRANCH_DISABLED
+  ROLE_CREATED
+  ROLE_UPDATED
+  ROLE_DISABLED
+  ROLE_PERMISSIONS_ASSIGNED
+  USER_ROLES_ASSIGNED
+  PERSON_CREATED
+  PERSON_UPDATED
+  PERSON_DISABLED
+  CATEGORY_CREATED
+  CATEGORY_UPDATED
+  CATEGORY_DISABLED
+  SUBCATEGORY_CREATED
+  SUBCATEGORY_UPDATED
+  SUBCATEGORY_DISABLED
+  ITEM_CREATED
+  ITEM_UPDATED
+  ITEM_DISABLED
+  IMAGE_CREATED
+  IMAGE_UPDATED
+  IMAGE_DISABLED
+  SUPPLIER_CREATED
+  SUPPLIER_UPDATED
+  SUPPLIER_DISABLED
+  WAREHOUSE_CREATED
+  WAREHOUSE_UPDATED
+  WAREHOUSE_DISABLED
+  STOCK_ENTRY_CREATED
+  STOCK_ENTRY_CONFIRMED
+  STOCK_TRANSFER_CREATED
+  STOCK_TRANSFER_REQUESTED
+  STOCK_TRANSFER_APPROVED
+  STOCK_TRANSFER_DISPATCHED
+  STOCK_TRANSFER_RECEIVED
+  STOCK_TRANSFER_REJECTED
+  STOCK_TRANSFER_CANCELLED
+  STOCK_ADJUSTMENT_CREATED
+  STOCK_ADJUSTMENT_CONFIRMED
+  STOCK_COUNT_CREATED
+  STOCK_COUNT_APPROVED
+  SALE_CREATED
+  SALE_VOIDED
+}
+
+enum TipoPersona {
+  NATURAL
+  JURIDICA
+}
+
+enum TipoIdentificacion {
+  CEDULA
+  RUC
+  PASAPORTE
+}
+
+enum PersonaRol {
+  CLIENTE
+  PROVEEDOR
+  EMPLEADO
+  VENDEDOR
+}
+
+enum CustomerType {
+  WHOLESALE
+  RETAIL
+  FINAL_CONSUMER
+}
+
+enum InventoryMovementType {
+  STOCK_ENTRY
+  TRANSFER_OUT
+  TRANSFER_IN
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  STOCK_COUNT_IN
+  STOCK_COUNT_OUT
+  SALE_OUT
+  CREDIT_NOTE_IN
+}
+
+enum InventorySourceType {
+  STOCK_ENTRY
+  STOCK_TRANSFER
+  STOCK_ADJUSTMENT
+  STOCK_COUNT
+  SALE
+}
+
+enum StockEntryType {
+  PURCHASE_INVOICE
+  MANUAL
+  OPENING_BALANCE
+}
+
+enum StockEntryStatus {
+  DRAFT
+  CONFIRMED
+  CANCELLED
+}
+
+enum StockTransferStatus {
+  DRAFT
+  REQUESTED
+  APPROVED
+  DISPATCHED
+  RECEIVED
+  REJECTED
+  CANCELLED
+}
+
+enum StockAdjustmentStatus {
+  DRAFT
+  CONFIRMED
+}
+
+enum StockCountStatus {
+  DRAFT
+  REVIEW
+  APPROVED
+}
+
+enum SaleStatus {
+  PENDING_DELIVERY
+  CONFIRMED
+  VOIDED
+}
+
+enum SaleDocumentType {
+  INVOICE
+  CREDIT_NOTE
+  SALES_NOTE
+  PROFORMA
+}
+
+model Tenant {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  name                  String
+  status                EntityStatus           @default(ACTIVE)
+  plan                  String                 @default("development")
+  storageQuotaBytes     BigInt                 @default(104857600)
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  companies             Company[]
+  branches              Branch[]
+  users                 User[]
+  roles                 Role[]
+  permissions           Permission[]
+  categories            Category[]
+  subcategories         Subcategory[]
+  catalogItems          CatalogItem[]
+  catalogItemImages     CatalogItemImage[]
+  taxRates              TaxRate[]
+  auditLogs             AuditLog[]
+  people                Person[]
+  warehouses            Warehouse[]
+  stockBalances         StockBalance[]
+  inventoryMovements    InventoryMovement[]
+  stockEntries          StockEntry[]
+  stockTransfers        StockTransfer[]
+  stockAdjustments      StockAdjustment[]
+  stockCounts           StockCount[]
+  sales                 Sale[]
+  paymentMethods        PaymentMethod[]
+  saleDocumentSequences SaleDocumentSequence[]
+}
+
+model Company {
+  id                    String                 @id @default(uuid()) @db.Uuid
+  tenantId              String                 @db.Uuid
+  legalName             String
+  tradeName             String
+  ruc                   String
+  mainAddress           String
+  email                 String
+  phone                 String
+  logoObjectKey         String?
+  establishmentNumber   String?
+  accountingRequired    Boolean                @default(false)
+  specialContributor    Boolean                @default(false)
+  largeTaxpayer         Boolean                @default(false)
+  exporter              Boolean                @default(false)
+  exporterType          String                 @default("NO_HABITUAL")
+  rimpe                 Boolean                @default(false)
+  withholdingAgent      Boolean                @default(false)
+  city                  String?
+  decimalPlaces         Int                    @default(2)
+  notificationEmail     String?
+  proformaSignatureKey  String?
+  quoteWarranty         String?
+  quotePaymentMethod    String?
+  status                EntityStatus           @default(ACTIVE)
+  sriEnvironment        String                 @default("TEST")
+  currency              String                 @default("USD")
+  timezone              String                 @default("America/Guayaquil")
+  createdBy             String?                @db.Uuid
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+  tenant                Tenant                 @relation(fields: [tenantId], references: [id])
+  branches              Branch[]
+  userScopes            UserCompanyScope[]
+  people                Person[]
+  warehouses            Warehouse[]
+  catalogItems          CatalogItem[]
+  stockBalances         StockBalance[]
+  inventoryMovements    InventoryMovement[]
+  stockEntries          StockEntry[]
+  stockTransfers        StockTransfer[]
+  stockAdjustments      StockAdjustment[]
+  stockCounts           StockCount[]
+  sales                 Sale[]
+  saleDocumentSequences SaleDocumentSequence[]
+
+  @@unique([tenantId, ruc])
+  @@index([tenantId, status])
+}
+
+model Branch {
+  id                   String              @id @default(uuid()) @db.Uuid
+  tenantId             String              @db.Uuid
+  companyId            String              @db.Uuid
+  code                 String
+  name                 String
+  address              String
+  phone                String
+  email                String
+  managerName          String
+  status               EntityStatus        @default(ACTIVE)
+  sriEstablishmentCode String              @default("001")
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  tenant               Tenant              @relation(fields: [tenantId], references: [id])
+  company              Company             @relation(fields: [companyId], references: [id])
+  userScopes           UserBranchScope[]
+  warehouses           Warehouse[]
+  stockBalances        StockBalance[]
+  inventoryMovements   InventoryMovement[]
+  stockEntries         StockEntry[]
+  sales                Sale[]
+  stockAdjustments     StockAdjustment[]
+  stockCounts          StockCount[]
+
+  @@unique([companyId, code])
+  @@index([tenantId, companyId])
+  @@index([tenantId, status])
+}
+
+model User {
+  id                    String              @id @default(uuid()) @db.Uuid
+  tenantId              String              @db.Uuid
+  username              String
+  email                 String
+  name                  String
+  passwordHash          String
+  refreshTokenHash      String?
+  status                EntityStatus        @default(ACTIVE)
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  tenant                Tenant              @relation(fields: [tenantId], references: [id])
+  roles                 UserRole[]
+  companyScopes         UserCompanyScope[]
+  branchScopes          UserBranchScope[]
+  auditLogs             AuditLog[]
+  catalogItemImages     CatalogItemImage[]
+  createdStockEntries   StockEntry[]        @relation("StockEntryCreator")
+  confirmedStockEntries StockEntry[]        @relation("StockEntryConfirmer")
+  requestedTransfers    StockTransfer[]     @relation("TransferRequester")
+  approvedTransfers     StockTransfer[]     @relation("TransferApprover")
+  dispatchedTransfers   StockTransfer[]     @relation("TransferDispatcher")
+  receivedTransfers     StockTransfer[]     @relation("TransferReceiver")
+  createdAdjustments    StockAdjustment[]   @relation("AdjustmentCreator")
+  confirmedAdjustments  StockAdjustment[]   @relation("AdjustmentConfirmer")
+  createdCounts         StockCount[]        @relation("CountCreator")
+  approvedCounts        StockCount[]        @relation("CountApprover")
+  createdSales          Sale[]              @relation("SaleCreator")
+  voidedSales           Sale[]              @relation("SaleVoider")
+  deliveredSales        Sale[]              @relation("SaleDeliverer")
+  inventoryMovements    InventoryMovement[]
+
+  @@unique([tenantId, username])
+  @@unique([tenantId, email])
+  @@index([tenantId, status])
+}
+
+model Role {
+  id          String           @id @default(uuid()) @db.Uuid
+  tenantId    String           @db.Uuid
+  name        String
+  description String?
+  status      EntityStatus     @default(ACTIVE)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  tenant      Tenant           @relation(fields: [tenantId], references: [id])
+  users       UserRole[]
+  permissions RolePermission[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, status])
+}
+
+model Permission {
+  id          String           @id @default(uuid()) @db.Uuid
+  tenantId    String           @db.Uuid
+  code        String
+  description String
+  tenant      Tenant           @relation(fields: [tenantId], references: [id])
+  roles       RolePermission[]
+
+  @@unique([tenantId, code])
+}
+
+model UserRole {
+  userId String @db.Uuid
+  roleId String @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+}
+
+model RolePermission {
+  roleId       String     @db.Uuid
+  permissionId String     @db.Uuid
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+}
+
+model UserCompanyScope {
+  userId    String  @db.Uuid
+  companyId String  @db.Uuid
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@id([userId, companyId])
+}
+
+model UserBranchScope {
+  userId   String @db.Uuid
+  branchId String @db.Uuid
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  @@id([userId, branchId])
+}
+
+model Category {
+  id            String        @id @default(uuid()) @db.Uuid
+  tenantId      String        @db.Uuid
+  type          CatalogType
+  name          String
+  description   String?
+  status        EntityStatus  @default(ACTIVE)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  tenant        Tenant        @relation(fields: [tenantId], references: [id])
+  subcategories Subcategory[]
+
+  @@unique([tenantId, type, name])
+  @@index([tenantId, type, status])
+}
+
+model Subcategory {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @db.Uuid
+  categoryId   String        @db.Uuid
+  name         String
+  description  String?
+  status       EntityStatus  @default(ACTIVE)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  category     Category      @relation(fields: [categoryId], references: [id])
+  catalogItems CatalogItem[]
+
+  @@unique([tenantId, categoryId, name])
+  @@index([tenantId, categoryId, status])
+}
+
+model CatalogItem {
+  id                   String                @id @default(uuid()) @db.Uuid
+  tenantId             String                @db.Uuid
+  companyId            String                @db.Uuid
+  subcategoryId        String                @db.Uuid
+  name                 String
+  description          String?
+  internalCode         String
+  barcode              String?
+  model                String?
+  unitPrice            Decimal               @default(0) @db.Decimal(12, 2)
+  pvp                  Decimal               @default(0) @db.Decimal(12, 2)
+  pvp1                 Decimal               @default(0) @db.Decimal(12, 2)
+  pvp2                 Decimal               @default(0) @db.Decimal(12, 2)
+  pvp3                 Decimal               @default(0) @db.Decimal(12, 2)
+  finalPrice           Decimal               @default(0) @db.Decimal(12, 2)
+  salePrice            Decimal               @db.Decimal(12, 2)
+  cost                 Decimal               @db.Decimal(12, 2)
+  taxRateId            String?               @db.Uuid
+  status               EntityStatus          @default(ACTIVE)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  tenant               Tenant                @relation(fields: [tenantId], references: [id])
+  company              Company               @relation(fields: [companyId], references: [id])
+  subcategory          Subcategory           @relation(fields: [subcategoryId], references: [id])
+  taxRate              TaxRate?              @relation(fields: [taxRateId], references: [id])
+  images               CatalogItemImage[]
+  stockBalances        StockBalance[]
+  inventoryMovements   InventoryMovement[]
+  stockEntryLines      StockEntryLine[]
+  stockTransferLines   StockTransferLine[]
+  stockAdjustmentLines StockAdjustmentLine[]
+  stockCountLines      StockCountLine[]
+  saleLines            SaleLine[]
+
+  @@unique([tenantId, internalCode])
+  @@index([tenantId, status])
+  @@index([tenantId, companyId, status])
+  @@index([tenantId, subcategoryId])
+}
+
+model TaxRate {
+  id           String        @id @default(uuid()) @db.Uuid
+  tenantId     String        @db.Uuid
+  code         String
+  name         String
+  ratePercent  Decimal       @db.Decimal(5, 2)
+  status       EntityStatus  @default(ACTIVE)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  tenant       Tenant        @relation(fields: [tenantId], references: [id])
+  catalogItems CatalogItem[]
+  saleLines    SaleLine[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+}
+
+model CatalogItemImage {
+  id                 String       @id @default(uuid()) @db.Uuid
+  tenantId           String       @db.Uuid
+  catalogItemId      String       @db.Uuid
+  objectKey          String       @unique
+  thumbnailObjectKey String?
+  originalFileName   String
+  mimeType           String
+  sizeBytes          Int
+  width              Int
+  height             Int
+  position           Int
+  isPrimary          Boolean      @default(false)
+  status             EntityStatus @default(ACTIVE)
+  createdAt          DateTime     @default(now())
+  createdBy          String       @db.Uuid
+  tenant             Tenant       @relation(fields: [tenantId], references: [id])
+  catalogItem        CatalogItem  @relation(fields: [catalogItemId], references: [id])
+  creator            User         @relation(fields: [createdBy], references: [id])
+
+  @@index([tenantId, catalogItemId, status])
+}
+
+model AuditLog {
+  id         String      @id @default(uuid()) @db.Uuid
+  tenantId   String?     @db.Uuid
+  userId     String?     @db.Uuid
+  action     AuditAction
+  entityType String
+  entityId   String?
+  before     Json?
+  after      Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
+  tenant     Tenant?     @relation(fields: [tenantId], references: [id])
+  user       User?       @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, action, createdAt])
+  @@index([entityType, entityId])
+}
+
+model Person {
+  id                 String             @id @default(uuid()) @db.Uuid
+  tenantId           String             @db.Uuid
+  companyId          String             @db.Uuid
+  tipoPersona        TipoPersona
+  tipoIdentificacion TipoIdentificacion
+  identificacion     String
+  nombre             String
+  telefono           String?
+  email              String?
+  direccion          String?
+  activo             Boolean            @default(true)
+  createdBy          String?            @db.Uuid
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  tenant             Tenant             @relation(fields: [tenantId], references: [id])
+  company            Company            @relation(fields: [companyId], references: [id])
+  roles              PersonRole[]
+  sales              Sale[]
+  stockEntries       StockEntry[]
+
+  @@unique([tenantId, identificacion])
+  @@index([tenantId, companyId, activo])
+}
+
+model PersonRole {
+  personId String     @db.Uuid
+  role     PersonaRol
+  person   Person     @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@id([personId, role])
+  @@index([role])
+}
+
+model Warehouse {
+  id                   String              @id @default(uuid()) @db.Uuid
+  tenantId             String              @db.Uuid
+  companyId            String              @db.Uuid
+  branchId             String              @db.Uuid
+  code                 String
+  name                 String
+  description          String?
+  isDefault            Boolean             @default(false)
+  status               EntityStatus        @default(ACTIVE)
+  createdBy            String?             @db.Uuid
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  tenant               Tenant              @relation(fields: [tenantId], references: [id])
+  company              Company             @relation(fields: [companyId], references: [id])
+  branch               Branch              @relation(fields: [branchId], references: [id])
+  stockBalances        StockBalance[]
+  inventoryMovements   InventoryMovement[]
+  stockEntries         StockEntry[]
+  sales                Sale[]
+  sourceTransfers      StockTransfer[]     @relation("SourceWarehouse")
+  destinationTransfers StockTransfer[]     @relation("DestinationWarehouse")
+  stockAdjustments     StockAdjustment[]
+  stockCounts          StockCount[]
+
+  @@unique([companyId, code])
+  @@index([tenantId, companyId, branchId, status])
+  @@index([tenantId, branchId, isDefault, status])
+}
+
+model StockBalance {
+  id            String      @id @default(uuid()) @db.Uuid
+  tenantId      String      @db.Uuid
+  companyId     String      @db.Uuid
+  branchId      String      @db.Uuid
+  warehouseId   String      @db.Uuid
+  catalogItemId String      @db.Uuid
+  onHand        Decimal     @default(0) @db.Decimal(18, 4)
+  reserved      Decimal     @default(0) @db.Decimal(18, 4)
+  averageCost   Decimal     @default(0) @db.Decimal(18, 6)
+  version       Int         @default(0)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  tenant        Tenant      @relation(fields: [tenantId], references: [id])
+  company       Company     @relation(fields: [companyId], references: [id])
+  branch        Branch      @relation(fields: [branchId], references: [id])
+  warehouse     Warehouse   @relation(fields: [warehouseId], references: [id])
+  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id])
+
+  @@unique([tenantId, warehouseId, catalogItemId])
+  @@index([tenantId, companyId, branchId])
+  @@index([tenantId, catalogItemId])
+}
+
+model InventoryMovement {
+  id                String                @id @default(uuid()) @db.Uuid
+  tenantId          String                @db.Uuid
+  companyId         String                @db.Uuid
+  branchId          String                @db.Uuid
+  warehouseId       String                @db.Uuid
+  catalogItemId     String                @db.Uuid
+  type              InventoryMovementType
+  quantityIn        Decimal               @default(0) @db.Decimal(18, 4)
+  quantityOut       Decimal               @default(0) @db.Decimal(18, 4)
+  previousOnHand    Decimal               @db.Decimal(18, 4)
+  nextOnHand        Decimal               @db.Decimal(18, 4)
+  unitCost          Decimal               @db.Decimal(18, 6)
+  totalCost         Decimal               @db.Decimal(18, 6)
+  sourceType        InventorySourceType
+  sourceId          String                @db.Uuid
+  reference         String?
+  correlationId     String                @db.Uuid
+  idempotencyKey    String
+  responsibleUserId String                @db.Uuid
+  effectiveAt       DateTime              @default(now())
+  createdAt         DateTime              @default(now())
+  tenant            Tenant                @relation(fields: [tenantId], references: [id])
+  company           Company               @relation(fields: [companyId], references: [id])
+  branch            Branch                @relation(fields: [branchId], references: [id])
+  warehouse         Warehouse             @relation(fields: [warehouseId], references: [id])
+  catalogItem       CatalogItem           @relation(fields: [catalogItemId], references: [id])
+  responsibleUser   User                  @relation(fields: [responsibleUserId], references: [id])
+
+  @@unique([tenantId, idempotencyKey])
+  @@index([tenantId, catalogItemId, createdAt])
+  @@index([tenantId, warehouseId, createdAt])
+  @@index([sourceType, sourceId])
+}
+
+model StockEntry {
+  id             String           @id @default(uuid()) @db.Uuid
+  tenantId       String           @db.Uuid
+  companyId      String           @db.Uuid
+  branchId       String           @db.Uuid
+  warehouseId    String           @db.Uuid
+  supplierId     String?          @db.Uuid
+  type           StockEntryType
+  status         StockEntryStatus @default(DRAFT)
+  documentNumber String?
+  documentDate   DateTime?
+  fiscalAuth     String?
+  reference      String?
+  reason         String?
+  correlationId  String           @default(uuid()) @db.Uuid
+  confirmedAt    DateTime?
+  createdBy      String           @db.Uuid
+  confirmedBy    String?          @db.Uuid
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  tenant         Tenant           @relation(fields: [tenantId], references: [id])
+  company        Company          @relation(fields: [companyId], references: [id])
+  branch         Branch           @relation(fields: [branchId], references: [id])
+  warehouse      Warehouse        @relation(fields: [warehouseId], references: [id])
+  supplier       Person?          @relation(fields: [supplierId], references: [id])
+  creator        User             @relation("StockEntryCreator", fields: [createdBy], references: [id])
+  confirmer      User?            @relation("StockEntryConfirmer", fields: [confirmedBy], references: [id])
+  lines          StockEntryLine[]
+
+  @@index([tenantId, companyId, status])
+  @@index([tenantId, warehouseId, createdAt])
+}
+
+model StockEntryLine {
+  id            String      @id @default(uuid()) @db.Uuid
+  stockEntryId  String      @db.Uuid
+  catalogItemId String      @db.Uuid
+  quantity      Decimal     @db.Decimal(18, 4)
+  unitCost      Decimal     @db.Decimal(18, 6)
+  totalCost     Decimal     @db.Decimal(18, 6)
+  stockEntry    StockEntry  @relation(fields: [stockEntryId], references: [id], onDelete: Cascade)
+  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id])
+
+  @@index([catalogItemId])
+}
+
+model StockTransfer {
+  id                     String              @id @default(uuid()) @db.Uuid
+  tenantId               String              @db.Uuid
+  companyId              String              @db.Uuid
+  sourceWarehouseId      String              @db.Uuid
+  destinationWarehouseId String              @db.Uuid
+  status                 StockTransferStatus @default(DRAFT)
+  reference              String?
+  reason                 String?
+  correlationId          String              @default(uuid()) @db.Uuid
+  requestedBy            String?             @db.Uuid
+  requestedAt            DateTime?
+  approvedBy             String?             @db.Uuid
+  approvedAt             DateTime?
+  dispatchedBy           String?             @db.Uuid
+  dispatchedAt           DateTime?
+  receivedBy             String?             @db.Uuid
+  receivedAt             DateTime?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  tenant                 Tenant              @relation(fields: [tenantId], references: [id])
+  company                Company             @relation(fields: [companyId], references: [id])
+  sourceWarehouse        Warehouse           @relation("SourceWarehouse", fields: [sourceWarehouseId], references: [id])
+  destinationWarehouse   Warehouse           @relation("DestinationWarehouse", fields: [destinationWarehouseId], references: [id])
+  requester              User?               @relation("TransferRequester", fields: [requestedBy], references: [id])
+  approver               User?               @relation("TransferApprover", fields: [approvedBy], references: [id])
+  dispatcher             User?               @relation("TransferDispatcher", fields: [dispatchedBy], references: [id])
+  receiver               User?               @relation("TransferReceiver", fields: [receivedBy], references: [id])
+  lines                  StockTransferLine[]
+
+  @@index([tenantId, companyId, status])
+  @@index([tenantId, sourceWarehouseId])
+  @@index([tenantId, destinationWarehouseId])
+}
+
+model StockTransferLine {
+  id              String        @id @default(uuid()) @db.Uuid
+  stockTransferId String        @db.Uuid
+  catalogItemId   String        @db.Uuid
+  quantity        Decimal       @db.Decimal(18, 4)
+  unitCost        Decimal       @default(0) @db.Decimal(18, 6)
+  stockTransfer   StockTransfer @relation(fields: [stockTransferId], references: [id], onDelete: Cascade)
+  catalogItem     CatalogItem   @relation(fields: [catalogItemId], references: [id])
+
+  @@index([catalogItemId])
+}
+
+model StockAdjustment {
+  id            String                @id @default(uuid()) @db.Uuid
+  tenantId      String                @db.Uuid
+  companyId     String                @db.Uuid
+  branchId      String                @db.Uuid
+  warehouseId   String                @db.Uuid
+  status        StockAdjustmentStatus @default(DRAFT)
+  reason        String
+  reference     String
+  correlationId String                @default(uuid()) @db.Uuid
+  createdBy     String                @db.Uuid
+  confirmedBy   String?               @db.Uuid
+  confirmedAt   DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  tenant        Tenant                @relation(fields: [tenantId], references: [id])
+  company       Company               @relation(fields: [companyId], references: [id])
+  branch        Branch                @relation(fields: [branchId], references: [id])
+  warehouse     Warehouse             @relation(fields: [warehouseId], references: [id])
+  creator       User                  @relation("AdjustmentCreator", fields: [createdBy], references: [id])
+  confirmer     User?                 @relation("AdjustmentConfirmer", fields: [confirmedBy], references: [id])
+  stockCount    StockCount?
+  lines         StockAdjustmentLine[]
+
+  @@index([tenantId, companyId, status])
+  @@index([tenantId, warehouseId, createdAt])
+}
+
+model StockAdjustmentLine {
+  id                String          @id @default(uuid()) @db.Uuid
+  stockAdjustmentId String          @db.Uuid
+  catalogItemId     String          @db.Uuid
+  difference        Decimal         @db.Decimal(18, 4)
+  unitCost          Decimal         @default(0) @db.Decimal(18, 6)
+  stockAdjustment   StockAdjustment @relation(fields: [stockAdjustmentId], references: [id], onDelete: Cascade)
+  catalogItem       CatalogItem     @relation(fields: [catalogItemId], references: [id])
+
+  @@index([catalogItemId])
+}
+
+model StockCount {
+  id            String           @id @default(uuid()) @db.Uuid
+  tenantId      String           @db.Uuid
+  companyId     String           @db.Uuid
+  branchId      String           @db.Uuid
+  warehouseId   String           @db.Uuid
+  status        StockCountStatus @default(DRAFT)
+  reference     String?
+  correlationId String           @default(uuid()) @db.Uuid
+  adjustmentId  String?          @unique @db.Uuid
+  createdBy     String           @db.Uuid
+  approvedBy    String?          @db.Uuid
+  approvedAt    DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  tenant        Tenant           @relation(fields: [tenantId], references: [id])
+  company       Company          @relation(fields: [companyId], references: [id])
+  branch        Branch           @relation(fields: [branchId], references: [id])
+  warehouse     Warehouse        @relation(fields: [warehouseId], references: [id])
+  adjustment    StockAdjustment? @relation(fields: [adjustmentId], references: [id])
+  creator       User             @relation("CountCreator", fields: [createdBy], references: [id])
+  approver      User?            @relation("CountApprover", fields: [approvedBy], references: [id])
+  lines         StockCountLine[]
+
+  @@index([tenantId, companyId, status])
+  @@index([tenantId, warehouseId, createdAt])
+}
+
+model StockCountLine {
+  id            String      @id @default(uuid()) @db.Uuid
+  stockCountId  String      @db.Uuid
+  catalogItemId String      @db.Uuid
+  expectedQty   Decimal     @db.Decimal(18, 4)
+  physicalQty   Decimal     @db.Decimal(18, 4)
+  difference    Decimal     @db.Decimal(18, 4)
+  unitCost      Decimal     @default(0) @db.Decimal(18, 6)
+  stockCount    StockCount  @relation(fields: [stockCountId], references: [id], onDelete: Cascade)
+  catalogItem   CatalogItem @relation(fields: [catalogItemId], references: [id])
+
+  @@index([catalogItemId])
+}
+
+model Sale {
+  id                     String           @id @default(uuid()) @db.Uuid
+  tenantId               String           @db.Uuid
+  companyId              String           @db.Uuid
+  branchId               String           @db.Uuid
+  warehouseId            String           @db.Uuid
+  customerId             String?          @db.Uuid
+  customerType           CustomerType     @default(FINAL_CONSUMER)
+  documentType           SaleDocumentType @default(INVOICE)
+  status                 SaleStatus       @default(CONFIRMED)
+  issueDate              DateTime         @default(now())
+  dueDays                Int              @default(0)
+  dueDate                DateTime         @default(now())
+  delivered              Boolean          @default(true)
+  deliveredAt            DateTime?
+  deliveredBy            String?          @db.Uuid
+  establishmentCode      String           @default("001")
+  emissionPoint          String           @default("001")
+  sequential             Int?
+  documentNumber         String?
+  purchaseOrder          String?
+  reference              String?
+  description            String?
+  subtotal               Decimal          @default(0) @db.Decimal(18, 6)
+  discountRate           Decimal          @default(0) @db.Decimal(5, 2)
+  discountTotal          Decimal          @default(0) @db.Decimal(18, 6)
+  taxableSubtotal        Decimal          @default(0) @db.Decimal(18, 6)
+  taxTotal               Decimal          @default(0) @db.Decimal(18, 6)
+  total                  Decimal          @default(0) @db.Decimal(18, 6)
+  sriStatus              String           @default("NOT_APPLICABLE")
+  sriAccessKey           String?
+  sriXml                 String?          @db.Text
+  sriGeneratedAt         DateTime?
+  sriSentAt              DateTime?
+  sriAuthorizationNumber String?
+  sriAuthorizationDate   DateTime?
+  sriError               String?          @db.Text
+  correlationId          String           @default(uuid()) @db.Uuid
+  confirmedAt            DateTime         @default(now())
+  voidedAt               DateTime?
+  createdBy              String           @db.Uuid
+  voidedBy               String?          @db.Uuid
+  createdAt              DateTime         @default(now())
+  updatedAt              DateTime         @updatedAt
+  tenant                 Tenant           @relation(fields: [tenantId], references: [id])
+  company                Company          @relation(fields: [companyId], references: [id])
+  branch                 Branch           @relation(fields: [branchId], references: [id])
+  warehouse              Warehouse        @relation(fields: [warehouseId], references: [id])
+  customer               Person?          @relation(fields: [customerId], references: [id])
+  creator                User             @relation("SaleCreator", fields: [createdBy], references: [id])
+  voider                 User?            @relation("SaleVoider", fields: [voidedBy], references: [id])
+  deliverer              User?            @relation("SaleDeliverer", fields: [deliveredBy], references: [id])
+  lines                  SaleLine[]
+  payments               SalePayment[]
+
+  @@unique([tenantId, companyId, documentType, documentNumber])
+  @@index([tenantId, companyId, status])
+  @@index([tenantId, warehouseId, createdAt])
+  @@index([tenantId, customerId])
+}
+
+model SaleLine {
+  id                 String      @id @default(uuid()) @db.Uuid
+  saleId             String      @db.Uuid
+  catalogItemId      String      @db.Uuid
+  taxRateId          String?     @db.Uuid
+  quantity           Decimal     @db.Decimal(18, 4)
+  unitPrice          Decimal     @db.Decimal(18, 6)
+  unit               String      @default("Unidad")
+  discountRate       Decimal     @default(0) @db.Decimal(5, 2)
+  discountAmount     Decimal     @default(0) @db.Decimal(18, 6)
+  netSubtotal        Decimal     @default(0) @db.Decimal(18, 6)
+  taxRatePercent     Decimal     @default(0) @db.Decimal(5, 2)
+  taxAmount          Decimal     @default(0) @db.Decimal(18, 6)
+  lineTotal          Decimal     @default(0) @db.Decimal(18, 6)
+  incomeTaxRetention Decimal     @default(0) @db.Decimal(18, 6)
+  ivaRetention       Decimal     @default(0) @db.Decimal(18, 6)
+  stockUnitCost      Decimal     @default(0) @db.Decimal(18, 6)
+  sale               Sale        @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  catalogItem        CatalogItem @relation(fields: [catalogItemId], references: [id])
+  taxRate            TaxRate?    @relation(fields: [taxRateId], references: [id])
+
+  @@index([saleId])
+  @@index([catalogItemId])
+}
+
+model PaymentMethod {
+  id        String        @id @default(uuid()) @db.Uuid
+  tenantId  String        @db.Uuid
+  code      String
+  name      String
+  status    EntityStatus  @default(ACTIVE)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+  tenant    Tenant        @relation(fields: [tenantId], references: [id])
+  payments  SalePayment[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+}
+
+model SalePayment {
+  id              String        @id @default(uuid()) @db.Uuid
+  saleId          String        @db.Uuid
+  paymentMethodId String        @db.Uuid
+  amount          Decimal       @db.Decimal(18, 6)
+  reference       String?
+  createdAt       DateTime      @default(now())
+  sale            Sale          @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  paymentMethod   PaymentMethod @relation(fields: [paymentMethodId], references: [id])
+
+  @@index([saleId])
+  @@index([paymentMethodId])
+}
+
+model SaleDocumentSequence {
+  id                String           @id @default(uuid()) @db.Uuid
+  tenantId          String           @db.Uuid
+  companyId         String           @db.Uuid
+  documentType      SaleDocumentType
+  establishmentCode String
+  emissionPoint     String
+  currentNumber     Int              @default(0)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  tenant            Tenant           @relation(fields: [tenantId], references: [id])
+  company           Company          @relation(fields: [companyId], references: [id])
+
+  @@unique([tenantId, companyId, documentType, establishmentCode, emissionPoint])
+  @@index([tenantId, companyId, documentType])
+}

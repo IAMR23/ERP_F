@@ -1,0 +1,25 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ERP}
+      POSTGRES_USER: ${POSTGRES_USER:-erp_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-erp_dev_password}
+    ports:
+      - "55433:5432"
+    volumes:
+      - erp_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-erp_user} -d ${POSTGRES_DB:-ERP}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - erp_internal
+
+volumes:
+  erp_postgres_data:
+
+networks:
+  erp_internal:
+    driver: bridge
