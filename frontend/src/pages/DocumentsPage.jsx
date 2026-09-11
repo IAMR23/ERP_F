@@ -1,15 +1,21 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  BadgeCheck,
+  Circle,
   Clipboard,
   Download,
   Eye,
   FileSearch,
   FileText,
   Printer,
+  Mail,
+  PenLine,
+  Pencil,
   RefreshCw,
   Search,
   Send,
+  Upload,
   X
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -19,9 +25,12 @@ import {
   downloadRidePdf,
   getDocument,
   getDocuments,
+  sendInvoiceEmail,
   sendSriDocument,
+  updateDocumentWarehouse,
   validateSriDocument
 } from "../services/documentService";
+import { getWarehouses } from "../services/warehouseService";
 
 const inputClass =
   "h-10 w-full rounded-lg border border-line bg-white px-3 text-sm text-ink outline-none focus:border-brand focus:ring-2 focus:ring-brand/15";
@@ -86,6 +95,34 @@ function sriStatusClass(status) {
 
 function dateTimeText(value) {
   return value ? new Date(value).toLocaleString("es-EC") : "-";
+}
+
+const milestoneLabels = {
+  signed: "Factura firmada electronicamente",
+  received: "Factura recibida por el SRI",
+  authorized: "Factura autorizada por el SRI",
+  emailed: "Factura enviada por correo al cliente"
+};
+
+function MilestoneIndicator({ document, name }) {
+  const item = document.electronicMilestones?.[name] || { state: "PENDING" };
+  const label = milestoneLabels[name];
+  const details = item.error || (item.date ? dateTimeText(item.date) : "Pendiente");
+  const title = item.state === "NOT_APPLICABLE" ? `${label}: No aplica` : `${label}: ${details}`;
+
+  if (item.state === "NOT_APPLICABLE") {
+    return <span className="text-[10px] font-medium text-slate-400" title={title} aria-label={title}>N/A</span>;
+  }
+
+  if (item.state === "COMPLETED") {
+    return <CheckCircle2 className="text-emerald-600" size={18} title={title} aria-label={title} />;
+  }
+
+  if (item.state === "ERROR") {
+    return <AlertTriangle className="text-red-600" size={18} title={title} aria-label={title} />;
+  }
+
+  return <Circle className="text-slate-300" size={18} title={title} aria-label={title} />;
 }
 
 function sriEnvironmentLabel(value) {
@@ -300,7 +337,7 @@ export default function DocumentsPage() {
   function handleSriValidated(document, message = `Factura ${document.documentNumber || ""} validada para SRI`) {
     setSelectedDocument(document);
     setDocuments((current) =>
-      current.map((item) => (item.id === document.id ? { ...item, sriStatus: document.sriStatus } : item))
+      current.map((item) => (item.id === document.id ? { ...item, ...document } : item))
     );
     setNotice(message);
   }
@@ -445,29 +482,22 @@ export default function DocumentsPage() {
           <table className="min-w-full divide-y divide-line text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase text-slate-500">
               <tr>
-                {[
-                  "Emision",
-                  "Persona",
-                  "Documento",
-                  "Estado",
-                  "SRI",
-                  "Neto",
-                  "Imp.",
-                  "Total",
-                  "Ret.",
-                  "Saldo",
-                  "Acciones"
-                ].map((column) => (
-                  <th key={column} className="px-3 py-3 font-medium">
-                    {column}
-                  </th>
+                {["Emision", "Persona", "Documento", "Estado"].map((column) => (
+                  <th key={column} className="px-3 py-3 font-medium">{column}</th>
+                ))}
+                <th className="px-2 py-3 text-center" title={milestoneLabels.signed} aria-label={milestoneLabels.signed}><PenLine size={16} className="mx-auto" /></th>
+                <th className="px-2 py-3 text-center" title={milestoneLabels.received} aria-label={milestoneLabels.received}><Upload size={16} className="mx-auto" /></th>
+                <th className="px-2 py-3 text-center" title={milestoneLabels.authorized} aria-label={milestoneLabels.authorized}><BadgeCheck size={16} className="mx-auto" /></th>
+                <th className="px-2 py-3 text-center" title={milestoneLabels.emailed} aria-label={milestoneLabels.emailed}><Mail size={16} className="mx-auto" /></th>
+                {["Neto", "Imp.", "Total", "Ret.", "Saldo", "Acciones"].map((column) => (
+                  <th key={column} className="px-3 py-3 font-medium">{column}</th>
                 ))}
               </tr>
             </thead>
             <tbody className="divide-y divide-line">
               {loading ? (
                 <tr>
-                  <td className="px-4 py-6 text-center text-slate-500" colSpan="11">
+                  <td className="px-4 py-6 text-center text-slate-500" colSpan="14">
                     Cargando documentos...
                   </td>
                 </tr>
@@ -475,7 +505,7 @@ export default function DocumentsPage() {
 
               {!loading && !documents.length ? (
                 <tr>
-                  <td className="px-4 py-6 text-center text-slate-500" colSpan="11">
+                  <td className="px-4 py-6 text-center text-slate-500" colSpan="14">
                     Sin documentos encontrados
                   </td>
                 </tr>
@@ -506,17 +536,16 @@ export default function DocumentsPage() {
                           {statusLabel(document.status)}
                         </span>
                       </td>
-                      <td className="px-3 py-3">
-                        <span className={`rounded-md px-2 py-1 text-xs font-medium ${sriStatusClass(document.sriStatus)}`}>
-                          {sriStatusLabel(document.sriStatus)}
-                        </span>
-                      </td>
+                      {(["signed", "received", "authorized", "emailed"]).map((name) => (
+                        <td className="px-2 py-3 text-center" key={name}><MilestoneIndicator document={document} name={name} /></td>
+                      ))}
                       <td className="whitespace-nowrap px-3 py-3 text-right">${money(document.taxableSubtotal)}</td>
                       <td className="whitespace-nowrap px-3 py-3 text-right">${money(document.taxTotal)}</td>
                       <td className="whitespace-nowrap px-3 py-3 text-right font-medium">${money(document.total)}</td>
                       <td className="whitespace-nowrap px-3 py-3 text-right">${money(document.retentionTotal)}</td>
                       <td className="whitespace-nowrap px-3 py-3 text-right">${money(document.balance)}</td>
                       <td className="px-3 py-3">
+                        <div className="flex gap-1">
                         <button
                           className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line text-ink hover:bg-mist"
                           disabled={loadingDetail}
@@ -526,6 +555,19 @@ export default function DocumentsPage() {
                         >
                           <Eye size={16} aria-hidden="true" />
                         </button>
+                        {document.documentType === "INVOICE" ? (
+                          <button
+                            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line text-ink hover:bg-mist"
+                            disabled={loadingDetail}
+                            onClick={() => openDocument(document.id)}
+                            title="Editar bodega"
+                            aria-label="Editar bodega de la factura"
+                            type="button"
+                          >
+                            <Pencil size={16} aria-hidden="true" />
+                          </button>
+                        ) : null}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -579,6 +621,7 @@ export default function DocumentsPage() {
           document={selectedDocument}
           onClose={() => setSelectedDocument(null)}
           onValidated={handleSriValidated}
+          onUpdated={handleSriValidated}
         />
       ) : null}
     </div>
@@ -594,7 +637,7 @@ function Field({ label, children }) {
   );
 }
 
-function DocumentPreview({ document, onClose, onValidated }) {
+function DocumentPreview({ document, onClose, onValidated, onUpdated }) {
   const [copyState, setCopyState] = useState("");
   const [sriActionError, setSriActionError] = useState("");
   const [sriActionErrorDetails, setSriActionErrorDetails] = useState([]);
@@ -604,9 +647,65 @@ function DocumentPreview({ document, onClose, onValidated }) {
   const [sendingSri, setSendingSri] = useState(false);
   const [consultingSri, setConsultingSri] = useState(false);
   const [downloadingRide, setDownloadingRide] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [editingWarehouse, setEditingWarehouse] = useState(false);
+  const [savingWarehouse, setSavingWarehouse] = useState(false);
+  const [warehouses, setWarehouses] = useState([]);
+  const [warehouseId, setWarehouseId] = useState(document.warehouseId);
   const isInvoice = document.documentType === "INVOICE";
   const activeSriSubmission = lastSriSubmission || sriSubmissionFromDocument(document);
   const hasSignedXml = Boolean(document.sriXml?.includes("<ds:Signature") || document.sriXml?.includes("<Signature"));
+
+  async function beginWarehouseEdit() {
+    setSriActionError("");
+    try {
+      const data = await getWarehouses();
+      setWarehouses(
+        (data.warehouses || []).filter(
+          (warehouse) =>
+            warehouse.company?.id === document.companyId &&
+            warehouse.branch?.id === document.branchId &&
+            warehouse.status === "ACTIVE"
+        )
+      );
+      setWarehouseId(document.warehouseId);
+      setEditingWarehouse(true);
+    } catch (apiError) {
+      setSriActionError(apiError.message);
+    }
+  }
+
+  async function saveWarehouse() {
+    setSavingWarehouse(true);
+    setSriActionError("");
+    try {
+      const response = await updateDocumentWarehouse(document.id, warehouseId);
+      onUpdated(response.document, `Bodega actualizada en ${response.document.documentNumber || "el documento"}`);
+      setEditingWarehouse(false);
+    } catch (apiError) {
+      setSriActionError(apiError.message);
+    } finally {
+      setSavingWarehouse(false);
+    }
+  }
+
+  async function emailInvoice(force) {
+    setSendingEmail(true);
+    setSriActionError("");
+    setSriActionNotice("");
+    try {
+      const response = await sendInvoiceEmail(document.id, force);
+      onValidated(response.document, force ? "Factura reenviada por correo" : "Factura enviada por correo");
+      setSriActionNotice(force ? "Correo reenviado correctamente." : "Correo enviado correctamente.");
+    } catch (apiError) {
+      if (apiError.details?.document) {
+        onValidated(apiError.details.document, "El correo no pudo enviarse; se registro el error.");
+      }
+      setSriActionError(apiError.message);
+    } finally {
+      setSendingEmail(false);
+    }
+  }
 
   async function copyXml() {
     if (!document.sriXml) {
@@ -633,6 +732,9 @@ function DocumentPreview({ document, onClose, onValidated }) {
       onValidated(response.document, `Factura ${response.document.documentNumber || ""} validada para SRI`);
       setSriActionNotice("Certificado y XML validados");
     } catch (apiError) {
+      if (apiError.details?.document) {
+        onValidated(apiError.details.document, "Se registro el error de firma electronica.");
+      }
       setSriActionError(apiError.message);
       setSriActionErrorDetails(errorDetailLines(apiError));
     } finally {
@@ -657,6 +759,9 @@ function DocumentPreview({ document, onClose, onValidated }) {
     } catch (apiError) {
       const sriSubmission = apiError.details?.sriSubmission || null;
 
+      if (apiError.details?.document) {
+        onValidated(apiError.details.document, "Se registro el error de recepcion SRI.");
+      }
       setLastSriSubmission(sriSubmission);
       setSriActionError(sriSubmission?.error || apiError.message);
       setSriActionErrorDetails(errorDetailLines(apiError));
@@ -682,6 +787,9 @@ function DocumentPreview({ document, onClose, onValidated }) {
     } catch (apiError) {
       const sriSubmission = apiError.details?.sriSubmission || null;
 
+      if (apiError.details?.document) {
+        onValidated(apiError.details.document, "Se registro el error de autorizacion SRI.");
+      }
       setLastSriSubmission(sriSubmission);
       setSriActionError(sriSubmission?.error || apiError.message);
       setSriActionErrorDetails(errorDetailLines(apiError));
@@ -771,6 +879,33 @@ function DocumentPreview({ document, onClose, onValidated }) {
             </div>
           </div>
 
+          {isInvoice ? <section className="rounded-lg border border-line bg-slate-50 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium uppercase text-slate-500">Bodega de facturacion</p>
+                <p className="font-semibold text-ink">{document.warehouse?.code} - {document.warehouse?.name}</p>
+                <p className="text-xs text-slate-500">Solo se permite cambiar la bodega dentro de la misma empresa y sucursal.</p>
+              </div>
+              {!editingWarehouse ? (
+                <button className={iconButtonClass} onClick={beginWarehouseEdit} type="button">
+                  <Pencil size={16} aria-hidden="true" /><span className="ml-2">Editar bodega</span>
+                </button>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  <select className={inputClass} value={warehouseId} onChange={(event) => setWarehouseId(event.target.value)}>
+                    {warehouses.map((warehouse) => (
+                      <option key={warehouse.id} value={warehouse.id}>{warehouse.code} - {warehouse.name}</option>
+                    ))}
+                  </select>
+                  <button className={iconButtonClass} disabled={savingWarehouse || warehouseId === document.warehouseId} onClick={saveWarehouse} type="button">
+                    {savingWarehouse ? "Guardando..." : "Guardar"}
+                  </button>
+                  <button className={iconButtonClass} disabled={savingWarehouse} onClick={() => setEditingWarehouse(false)} type="button">Cancelar</button>
+                </div>
+              )}
+            </div>
+          </section> : null}
+
           {isInvoice ? (
             <section className="rounded-lg border border-amber-200 bg-amber-50">
               <div className="flex flex-col gap-3 border-b border-amber-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
@@ -786,6 +921,28 @@ function DocumentPreview({ document, onClose, onValidated }) {
               </div>
 
               <div className="grid gap-4 p-4 md:grid-cols-2">
+                <div>
+                  <p className="text-xs uppercase text-amber-700">Firma electronica</p>
+                  <p className="text-sm font-semibold text-ink">{dateTimeText(document.sriSignedAt)}</p>
+                  {document.sriSignatureError ? <p className="text-xs text-red-700">{document.sriSignatureError}</p> : null}
+                </div>
+                <div>
+                  <p className="text-xs uppercase text-amber-700">Recibida por SRI</p>
+                  <p className="text-sm font-semibold text-ink">{dateTimeText(document.sriSentAt)}</p>
+                  {document.sriReceptionError ? <p className="text-xs text-red-700">{document.sriReceptionError}</p> : null}
+                </div>
+                <div>
+                  <p className="text-xs uppercase text-amber-700">Autorizacion SRI</p>
+                  <p className="text-sm font-semibold text-ink">{dateTimeText(document.sriAuthorizationDate)}</p>
+                  <p className="break-all text-xs text-slate-600">{document.sriAuthorizationNumber || "Sin numero"}</p>
+                  {document.sriAuthorizationError ? <p className="text-xs text-red-700">{document.sriAuthorizationError}</p> : null}
+                </div>
+                <div>
+                  <p className="text-xs uppercase text-amber-700">Correo al cliente</p>
+                  <p className="text-sm font-semibold text-ink">{dateTimeText(document.customerEmailSentAt)}</p>
+                  <p className="text-xs text-slate-600">{document.customerEmailRecipient || document.customer?.email || "Sin destinatario"}</p>
+                  {document.customerEmailError ? <p className="text-xs text-red-700">{document.customerEmailError}</p> : null}
+                </div>
                 <div>
                   <p className="text-xs uppercase text-amber-700">Clave de acceso</p>
                   <p className="break-all font-mono text-sm text-ink">{document.sriAccessKey || "-"}</p>
@@ -825,7 +982,7 @@ function DocumentPreview({ document, onClose, onValidated }) {
                 </button>
                 <button
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-brand px-4 text-sm font-medium text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={validatingSri || !document.sriXml}
+                  disabled={validatingSri || !document.sriXml || Boolean(document.sriSentAt) || document.sriStatus === "AUTHORIZED"}
                   onClick={validateSri}
                   type="button"
                 >
@@ -841,6 +998,21 @@ function DocumentPreview({ document, onClose, onValidated }) {
                   <Send size={16} aria-hidden="true" />
                   {sendingSri ? "Enviando..." : "Enviar al SRI"}
                 </button>
+                {document.sriStatus === "AUTHORIZED" ? (
+                  <button
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-brand px-4 text-sm font-medium text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={sendingEmail}
+                    onClick={() => emailInvoice(Boolean(document.customerEmailSentAt))}
+                    type="button"
+                  >
+                    <Mail size={16} aria-hidden="true" />
+                    {sendingEmail
+                      ? "Enviando..."
+                      : document.customerEmailSentAt
+                        ? "Reenviar correo"
+                        : "Enviar por correo"}
+                  </button>
+                ) : null}
                 <button
                   className={iconButtonClass}
                   disabled={consultingSri || !["SENT", "PROCESSING"].includes(document.sriStatus)}

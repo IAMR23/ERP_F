@@ -11,9 +11,13 @@ import {
   UserRound,
   X
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import InvoicePrintSheet, { printInvoiceDocument } from "../components/InvoicePrintSheet";
-import { createDocument } from "../services/documentService";
+import {
+  createDocument,
+  sendSriDocument,
+  validateSriDocument
+} from "../services/documentService";
 import { getBranches } from "../services/organizationService";
 import { createPerson, getPeople } from "../services/personService";
 import { getPaymentMethods } from "../services/paymentMethodService";
@@ -125,6 +129,7 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
   const [clientSearch, setClientSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [savingDocument, setSavingDocument] = useState(false);
+  const [submittedDocumentId, setSubmittedDocumentId] = useState("");
   const [savingPerson, setSavingPerson] = useState(false);
   const [printableDocument, setPrintableDocument] = useState(null);
   const [error, setError] = useState("");
@@ -147,6 +152,7 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
     description: "",
     lines: []
   });
+  const submissionLockRef = useRef(false);
 
   const clients = useMemo(() => people.filter(isClient), [people]);
   const selectedClient = useMemo(
@@ -451,6 +457,15 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
     const savingAsProforma = isProformaMode || options.asProforma;
     const actionText = savingAsProforma ? "guardar la proforma" : "facturar";
 
+    if (!savingAsProforma && submittedDocumentId) {
+      setError("Esta factura ya fue registrada y no puede volver a enviarse.");
+      return;
+    }
+
+    if (submissionLockRef.current) {
+      return;
+    }
+
     setError("");
     setNotice("");
     setPrintableDocument(null);
@@ -502,6 +517,7 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
       };
     });
 
+    submissionLockRef.current = true;
     setSavingDocument(true);
 
     try {
@@ -514,6 +530,12 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
         lines
       });
 
+      let completedDocument = response.document;
+
+      if (!savingAsProforma && response.document?.id) {
+        setSubmittedDocumentId(response.document.id);
+      }
+
       setDocumentForm((current) => ({
         ...current,
         documentNumber:
@@ -521,18 +543,50 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
             ? current.documentNumber
             : response.document?.documentNumber || current.documentNumber
       }));
-      setNotice(
-        savingAsProforma
-          ? `Proforma ${response.document?.documentNumber || ""} guardada`
-          : `Documento ${response.document?.documentNumber || ""} guardado`
-      );
+
+      if (!savingAsProforma && response.document?.id) {
+        try {
+          const validationResponse = await validateSriDocument(response.document.id);
+          const sriResponse = await sendSriDocument(response.document.id);
+          completedDocument =
+            sriResponse.document || validationResponse.document || response.document;
+
+          if (completedDocument.sriReview?.status === "REJECTED") {
+            const sriError =
+              completedDocument.sriReview.error || sriResponse.sriSubmission?.error;
+            setError(
+              `Factura ${completedDocument.documentNumber || ""} guardada, pero no fue autorizada por el SRI${
+                sriError ? `: ${sriError}` : "."
+              }`
+            );
+          } else if (completedDocument.sriReview?.status === "AUTHORIZED") {
+            setNotice(
+              `Factura ${completedDocument.documentNumber || ""} guardada y autorizada por el SRI`
+            );
+          } else {
+            setNotice(
+              `Factura ${completedDocument.documentNumber || ""} guardada y enviada al SRI para su autorización`
+            );
+          }
+        } catch (sriError) {
+          setError(
+            `Factura ${response.document.documentNumber || ""} guardada, pero no se pudo completar el envío al SRI: ${sriError.message}`
+          );
+        }
+      } else {
+        setNotice(`Proforma ${response.document?.documentNumber || ""} guardada`);
+      }
+
       setPrintableDocument(
-        !savingAsProforma && response.document?.documentType === "INVOICE" ? response.document : null
+        !savingAsProforma && completedDocument?.documentType === "INVOICE"
+          ? completedDocument
+          : null
       );
-      onDocumentSaved?.(response.document);
+      onDocumentSaved?.(completedDocument);
     } catch (apiError) {
       setError(apiError.message);
     } finally {
+      submissionLockRef.current = false;
       setSavingDocument(false);
     }
   }
@@ -567,7 +621,7 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
 
       {!isProformaMode ? (
         <div className="mb-5 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
-          <span className="font-semibold">Importante:</span> La venta se guarda aqui; la validacion y envio al SRI se realiza desde Documentos.
+          <span className="font-semibold">Importante:</span> De acuerdo con la normativa del SRI, los documentos electrónicos deben ser autorizados en el momento de su emisión.
         </div>
       ) : null}
 
@@ -981,7 +1035,7 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
           <>
             <button
               className={iconButtonClass}
-              disabled={savingDocument}
+              disabled={savingDocument || Boolean(submittedDocumentId)}
               onClick={() => handleDocumentSubmit({ asProforma: true })}
               type="button"
             >
@@ -989,13 +1043,23 @@ export default function BillingPage({ session, mode = "billing", onDocumentSaved
               <span className="ml-2">Guardar proforma</span>
             </button>
             <button
-              className={iconButtonClass}
-              disabled={savingDocument}
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-brand px-4 text-sm font-medium text-white hover:bg-teal-800 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={savingDocument || Boolean(submittedDocumentId)}
               onClick={handleDocumentSubmit}
               type="button"
             >
-              <Save size={16} aria-hidden="true" />
-              <span className="ml-2">Guardar</span>
+              {savingDocument ? (
+                <RefreshCw className="animate-spin" size={16} aria-hidden="true" />
+              ) : (
+                <Save size={16} aria-hidden="true" />
+              )}
+              <span>
+                {savingDocument
+                  ? "Guardando y enviando..."
+                  : submittedDocumentId
+                    ? "Factura ya registrada"
+                    : "Guardar y enviar al SRI"}
+              </span>
             </button>
             {printableDocument ? (
               <button

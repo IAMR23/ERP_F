@@ -31,6 +31,7 @@
     "morgan": "^1.12.0",
     "multer": "^2.0.2",
     "node-forge": "^1.4.0",
+    "nodemailer": "^7.0.6",
     "pdfkit": "^0.20.2",
     "sharp": "^0.34.5",
     "soap": "^1.11.0",

@@ -840,13 +840,24 @@ model Sale {
   sriUnsignedXml         String?          @db.Text
   sriXml                 String?          @db.Text
   sriGeneratedAt         DateTime?
+  sriSignedAt            DateTime?
+  sriSignatureError      String?          @db.Text
   sriSentAt              DateTime?
+  sriReceptionError      String?          @db.Text
   sriAuthorizationNumber String?
   sriAuthorizationDate   DateTime?
+  sriAuthorizationError  String?          @db.Text
   sriReceptionResponse   String?          @db.Text
   sriAuthorizationXml    String?          @db.Text
   sriMessages            Json?
   sriError               String?          @db.Text
+  customerEmailSentAt    DateTime?
+  customerEmailLastSentAt DateTime?
+  customerEmailLastAttemptAt DateTime?
+  customerEmailSendingAt DateTime?
+  customerEmailRecipient String?
+  customerEmailError     String?          @db.Text
+  customerEmailAttemptCount Int           @default(0)
   correlationId          String           @default(uuid()) @db.Uuid
   confirmedAt            DateTime         @default(now())
   voidedAt               DateTime?

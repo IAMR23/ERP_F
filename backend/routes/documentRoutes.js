@@ -3,6 +3,8 @@ const {
   crearDocumento,
   consultarAutorizacionSri,
   descargarRidePdf,
+  enviarFacturaCorreo,
+  cambiarBodegaDocumento,
   enviarDocumentoSri,
   listarDocumentos,
   obtenerDocumento,
@@ -37,6 +39,18 @@ router.get(
   authMiddleware,
   requirePermission("sale.read"),
   descargarRidePdf
+);
+router.post(
+  "/api/v1/documents/:id/email",
+  authMiddleware,
+  requirePermission("sale.create"),
+  enviarFacturaCorreo
+);
+router.patch(
+  "/api/v1/documents/:id/warehouse",
+  authMiddleware,
+  requirePermission("sale.create"),
+  cambiarBodegaDocumento
 );
 router.post(
   "/api/v1/documents/credit-notes/validate",

@@ -46,6 +46,20 @@ export function consultSriAuthorization(id) {
   });
 }
 
+export function sendInvoiceEmail(id, force = false) {
+  return api(`/documents/${id}/email`, {
+    method: "POST",
+    body: JSON.stringify({ force })
+  });
+}
+
+export function updateDocumentWarehouse(id, warehouseId) {
+  return api(`/documents/${id}/warehouse`, {
+    method: "PATCH",
+    body: JSON.stringify({ warehouseId })
+  });
+}
+
 export async function downloadRidePdf(id) {
   const session = getSession();
   const response = await fetch(`${API_URL}/documents/${id}/ride`, {

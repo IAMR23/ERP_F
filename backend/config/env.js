@@ -23,5 +23,13 @@ module.exports = {
     .filter(Boolean),
   jwtAccessSecret: process.env.JWT_ACCESS_SECRET,
   accessTokenTtl: process.env.ACCESS_TOKEN_TTL || "15m",
-  sriP12Password: process.env.SRI_P12_PASSWORD || process.env.FirmaPrueba || ""
+  sriP12Password: process.env.SRI_P12_PASSWORD || process.env.FirmaPrueba || "",
+  smtp: {
+    host: process.env.SMTP_HOST || "",
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: String(process.env.SMTP_SECURE || "false").toLowerCase() === "true",
+    user: process.env.SMTP_USER || "",
+    password: process.env.SMTP_PASSWORD || "",
+    from: process.env.SMTP_FROM || ""
+  }
 };

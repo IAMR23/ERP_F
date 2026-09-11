@@ -45,3 +45,55 @@ test("resolveSriNumbering corrige el formato antiguo sucursal-establecimiento", 
     emissionPoint: "100"
   });
 });
+
+test("normalizeRequestedDocumentNumber acepta y descompone un numero SRI valido", () => {
+  assert.deepEqual(
+    _test.normalizeRequestedDocumentNumber("001-100-000000123", "001", "100"),
+    {
+      documentNumber: "001-100-000000123",
+      sequential: 123
+    }
+  );
+});
+
+test("normalizeRequestedDocumentNumber rechaza un numero de otro punto de emision", () => {
+  assert.throws(
+    () => _test.normalizeRequestedDocumentNumber("001-200-000000123", "001", "100"),
+    /debe iniciar con 001-100/
+  );
+});
+
+test("reserveDocumentNumber rechaza un duplicado dentro del mismo tenant y empresa", async () => {
+  let duplicateWhere;
+  const tx = {
+    sale: {
+      findFirst: async ({ where }) => {
+        duplicateWhere = where;
+        return { id: "sale-existente" };
+      }
+    }
+  };
+
+  await assert.rejects(
+    () =>
+      _test.reserveDocumentNumber(
+        tx,
+        {
+          tenantId: "tenant-1",
+          companyId: "company-1",
+          documentType: "INVOICE",
+          establishmentCode: "001",
+          emissionPoint: "100"
+        },
+        { documentNumber: "001-100-000000123", sequential: 123 }
+      ),
+    /Número de documento repetido: 001-100-000000123/
+  );
+
+  assert.deepEqual(duplicateWhere, {
+    tenantId: "tenant-1",
+    companyId: "company-1",
+    documentType: "INVOICE",
+    documentNumber: "001-100-000000123"
+  });
+});

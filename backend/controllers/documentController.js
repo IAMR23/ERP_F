@@ -65,6 +65,30 @@ async function descargarRidePdf(req, res, next) {
   }
 }
 
+async function enviarFacturaCorreo(req, res, next) {
+  try {
+    const document = await documentService.sendAuthorizedInvoiceEmail(req.user, req.params.id, {
+      force: Boolean(req.body?.force)
+    });
+    return res.json({ document });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function cambiarBodegaDocumento(req, res, next) {
+  try {
+    const document = await documentService.updateDocumentWarehouse(
+      req.user,
+      req.params.id,
+      req.body?.warehouseId
+    );
+    return res.json({ document });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function crearDocumento(req, res, next) {
   try {
     const document = await documentService.createDocument(req.user, req.body);
@@ -82,5 +106,7 @@ module.exports = {
   enviarDocumentoSri,
   consultarAutorizacionSri,
   descargarRidePdf,
+  enviarFacturaCorreo,
+  cambiarBodegaDocumento,
   crearDocumento
 };

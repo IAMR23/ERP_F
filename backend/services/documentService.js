@@ -1,5 +1,6 @@
 const { prisma } = require("../config/db");
 const env = require("../config/env");
+const crypto = require("crypto");
 const path = require("path");
 const { readStoredFile } = require("./imageService");
 const { buildSriInvoiceXml } = require("./sriInvoiceXmlService");
@@ -7,6 +8,7 @@ const { signSriInvoiceXml } = require("./sriSignatureService");
 const { queryAuthorization, sendDocument } = require("./sriSoapClient");
 const { validateInvoiceXml } = require("./sriXsdValidationService");
 const { buildRidePdf, documentParts } = require("./ridePdfService");
+const { assertAuthorizedForEmail, deliverInvoiceEmail } = require("./invoiceEmailService");
 
 const DOCUMENT_TYPES = ["INVOICE", "CREDIT_NOTE", "SALES_NOTE", "PROFORMA"];
 const SALE_STATUSES = ["PENDING_DELIVERY", "CONFIRMED", "VOIDED"];
@@ -121,13 +123,25 @@ function documentSelect(options = {}) {
     sriUnsignedXml: includeXml,
     sriXml: includeXml,
     sriGeneratedAt: true,
+    sriSignedAt: true,
+    sriSignatureError: true,
     sriSentAt: true,
+    sriReceptionError: true,
     sriAuthorizationNumber: true,
     sriAuthorizationDate: true,
+    sriAuthorizationError: true,
     sriReceptionResponse: includeXml,
     sriAuthorizationXml: includeXml,
     sriMessages: true,
     sriError: true,
+    customerEmailSentAt: true,
+    customerEmailLastSentAt: true,
+    customerEmailLastAttemptAt: true,
+    customerEmailSendingAt: true,
+    customerEmailRecipient: true,
+    customerEmailError: true,
+    customerEmailAttemptCount: true,
+    correlationId: true,
     createdAt: true,
     company: {
       select: {
@@ -202,6 +216,8 @@ function mapDocument(document) {
     0
   );
 
+  const electronicMilestones = calculateElectronicMilestones(document);
+
   return {
     ...document,
     subtotal: Number(document.subtotal),
@@ -215,6 +231,7 @@ function mapDocument(document) {
       status: document.sriStatus,
       accessKey: document.sriAccessKey,
       generatedAt: document.sriGeneratedAt,
+      signedAt: document.sriSignedAt,
       sentAt: document.sriSentAt,
       authorizationNumber: document.sriAuthorizationNumber,
       authorizationDate: document.sriAuthorizationDate,
@@ -225,6 +242,7 @@ function mapDocument(document) {
       total: Number(document.total),
       retentionTotal
     },
+    electronicMilestones,
     payments: document.payments.map((payment) => ({
       ...payment,
       amount: Number(payment.amount)
@@ -243,6 +261,49 @@ function mapDocument(document) {
       ivaRetention: Number(line.ivaRetention),
       stockUnitCost: Number(line.stockUnitCost)
     }))
+  };
+}
+
+function milestone(state, date = null, error = null) {
+  return { state, date, error };
+}
+
+function calculateElectronicMilestones(document) {
+  if (document?.documentType !== "INVOICE") {
+    return {
+      signed: milestone("NOT_APPLICABLE"),
+      received: milestone("NOT_APPLICABLE"),
+      authorized: milestone("NOT_APPLICABLE"),
+      emailed: milestone("NOT_APPLICABLE")
+    };
+  }
+
+  const authorized =
+    document.sriStatus === "AUTHORIZED" &&
+    Boolean(document.sriAuthorizationNumber) &&
+    Boolean(document.sriAuthorizationDate);
+
+  return {
+    signed: document.sriSignedAt
+      ? milestone("COMPLETED", document.sriSignedAt)
+      : document.sriSignatureError
+        ? milestone("ERROR", null, document.sriSignatureError)
+        : milestone("PENDING"),
+    received: document.sriSentAt
+      ? milestone("COMPLETED", document.sriSentAt)
+      : document.sriReceptionError
+        ? milestone("ERROR", null, document.sriReceptionError)
+        : milestone("PENDING"),
+    authorized: authorized
+      ? milestone("COMPLETED", document.sriAuthorizationDate)
+      : document.sriAuthorizationError
+        ? milestone("ERROR", null, document.sriAuthorizationError)
+        : milestone("PENDING"),
+    emailed: document.customerEmailSentAt
+      ? milestone("COMPLETED", document.customerEmailSentAt)
+      : document.customerEmailError
+        ? milestone("ERROR", null, document.customerEmailError)
+        : milestone("PENDING")
   };
 }
 
@@ -355,6 +416,90 @@ async function getNextDocumentNumber(tx, sale) {
       sequence.currentNumber
     ).padStart(9, "0")}`
   };
+}
+
+function normalizeRequestedDocumentNumber(value, establishmentCode, emissionPoint) {
+  const documentNumber = String(value || "").trim();
+
+  if (!documentNumber) {
+    return null;
+  }
+
+  const match = documentNumber.match(/^(\d{3})-(\d{3})-(\d{9})$/);
+
+  if (!match) {
+    throw badRequest("El número de documento debe tener el formato 001-001-000000001");
+  }
+
+  if (match[1] !== establishmentCode || match[2] !== emissionPoint) {
+    throw badRequest(
+      `El número de documento debe iniciar con ${establishmentCode}-${emissionPoint}`
+    );
+  }
+
+  const sequential = Number(match[3]);
+
+  if (!Number.isInteger(sequential) || sequential < 1) {
+    throw badRequest("El secuencial del documento debe ser mayor a cero");
+  }
+
+  return { documentNumber, sequential };
+}
+
+async function reserveDocumentNumber(tx, sale, requestedNumber) {
+  if (!requestedNumber) {
+    return getNextDocumentNumber(tx, sale);
+  }
+
+  const duplicated = await tx.sale.findFirst({
+    where: {
+      tenantId: sale.tenantId,
+      companyId: sale.companyId,
+      documentType: sale.documentType,
+      documentNumber: requestedNumber.documentNumber
+    },
+    select: { id: true }
+  });
+
+  if (duplicated) {
+    throw badRequest(
+      `Número de documento repetido: ${requestedNumber.documentNumber}. Este documento no puede volver a enviarse.`
+    );
+  }
+
+  const sequenceWhere = {
+    tenantId_companyId_documentType_establishmentCode_emissionPoint: {
+      tenantId: sale.tenantId,
+      companyId: sale.companyId,
+      documentType: sale.documentType,
+      establishmentCode: sale.establishmentCode,
+      emissionPoint: sale.emissionPoint
+    }
+  };
+  const sequence = await tx.saleDocumentSequence.upsert({
+    where: sequenceWhere,
+    update: {},
+    create: {
+      tenantId: sale.tenantId,
+      companyId: sale.companyId,
+      documentType: sale.documentType,
+      establishmentCode: sale.establishmentCode,
+      emissionPoint: sale.emissionPoint,
+      currentNumber: requestedNumber.sequential
+    }
+  });
+
+  if (sequence.currentNumber < requestedNumber.sequential) {
+    await tx.saleDocumentSequence.updateMany({
+      where: {
+        id: sequence.id,
+        currentNumber: { lt: requestedNumber.sequential }
+      },
+      data: { currentNumber: requestedNumber.sequential }
+    });
+  }
+
+  return requestedNumber;
 }
 
 function normalizeLines(lines) {
@@ -829,6 +974,15 @@ function validateSriCertificateFile(buffer) {
   }
 }
 
+async function throwSriSignatureError(document, message) {
+  const failed = await prisma.sale.update({
+    where: { id: document.id },
+    data: { sriSignatureError: message, sriError: message },
+    select: documentSelect({ includeXml: true })
+  });
+  throw badRequestWithDetails(message, { document: mapDocument(failed) });
+}
+
 function sriMessagesText(messages = []) {
   if (!Array.isArray(messages) || !messages.length) {
     return null;
@@ -869,17 +1023,20 @@ function buildSriSubmission(document, options = {}) {
 }
 
 async function throwSriSendError(document, message) {
+  let failedDocument = null;
   if (document?.id) {
-    await prisma.sale
+    failedDocument = await prisma.sale
       .update({
         where: { id: document.id },
-        data: { sriError: message }
+        data: { sriReceptionError: message, sriError: message },
+        select: documentSelect({ includeXml: true })
       })
       .catch(() => null);
   }
 
   throw badRequestWithDetails(message, {
-    sriSubmission: buildSriSubmission(document, {
+    document: failedDocument ? mapDocument(failedDocument) : null,
+    sriSubmission: buildSriSubmission(failedDocument || document, {
       status: "FAILED",
       error: message
     })
@@ -900,6 +1057,10 @@ async function validateSriDocument(user, id) {
     throw badRequest("Solo las facturas se validan para SRI");
   }
 
+  if (document.sriSentAt || document.sriStatus === "AUTHORIZED") {
+    throw badRequest("La factura ya fue enviada al SRI y no puede volver a firmarse ni enviarse");
+  }
+
   if (!document.sriXml || !document.sriAccessKey) {
     const regenerated = buildSriInvoiceXml(document);
     validateInvoiceXml(regenerated.xml);
@@ -918,40 +1079,48 @@ async function validateSriDocument(user, id) {
   }
 
   if (!document.company?.proformaSignatureKey) {
-    throw badRequest("Cargue el archivo .p12 en la configuracion de la empresa");
+    await throwSriSignatureError(document, "Cargue el archivo .p12 en la configuracion de la empresa");
   }
 
   if (path.extname(document.company.proformaSignatureKey).toLowerCase() !== ".p12") {
-    throw badRequest("El archivo configurado para firma debe tener extension .p12");
+    await throwSriSignatureError(document, "El archivo configurado para firma debe tener extension .p12");
   }
 
   if (!env.sriP12Password) {
-    throw badRequest("Configure SRI_P12_PASSWORD o FirmaPrueba con la contrasena del archivo .p12");
+    await throwSriSignatureError(
+      document,
+      "Configure SRI_P12_PASSWORD o FirmaPrueba con la contrasena del archivo .p12"
+    );
   }
 
-  const certificate = await readStoredFile(document.company.proformaSignatureKey).catch(() => {
-    throw badRequest("No se encontro el archivo .p12 configurado para la empresa");
+  const certificate = await readStoredFile(document.company.proformaSignatureKey).catch(async () => {
+    await throwSriSignatureError(document, "No se encontro el archivo .p12 configurado para la empresa");
   });
-  validateSriCertificateFile(certificate);
-
   const unsignedXml = document.sriUnsignedXml || document.sriXml;
-  validateInvoiceXml(unsignedXml);
 
   let signedXml;
 
   try {
+    validateSriCertificateFile(certificate);
+    validateInvoiceXml(unsignedXml);
     signedXml = signSriInvoiceXml(unsignedXml, certificate, env.sriP12Password);
     validateInvoiceXml(signedXml);
   } catch (error) {
-    throw badRequest(error.message || "No se pudo firmar el XML para SRI");
+    const message = error.message || "No se pudo firmar el XML para SRI";
+    await throwSriSignatureError(document, message);
   }
 
+  const signedAt = new Date();
   const updatedDocument = await prisma.sale.update({
     where: { id: document.id },
     data: {
       sriStatus: "READY_TO_SEND",
       sriXml: signedXml,
       sriUnsignedXml: unsignedXml,
+      sriSignedAt: signedAt,
+      sriSignatureError: null,
+      sriReceptionError: null,
+      sriAuthorizationError: null,
       sriError: null
     },
     select: documentSelect({ includeXml: true })
@@ -1005,6 +1174,7 @@ async function sendSriDocument(user, id) {
         sriStatus: "REJECTED",
         sriReceptionResponse: reception.rawXml || null,
         sriMessages: messages,
+        sriReceptionError: errorText,
         sriError: errorText
       },
       select: documentSelect({ includeXml: true })
@@ -1036,6 +1206,7 @@ async function sendSriDocument(user, id) {
       sriSentAt: sentAt,
       sriReceptionResponse: reception.rawXml || null,
       sriMessages: reception.messages || [],
+      sriReceptionError: null,
       sriError: null
     }
   });
@@ -1075,31 +1246,54 @@ async function consultSriAuthorization(user, id, options = {}) {
   try {
     authorization = await queryAuthorization(document.company, document.sriAccessKey);
   } catch (error) {
-    await throwSriSendError(document, error.message || "No se pudo consultar la autorizacion en el SRI");
+    const message = error.message || "No se pudo consultar la autorizacion en el SRI";
+    const failed = await prisma.sale.update({
+      where: { id: document.id },
+      data: { sriAuthorizationError: message, sriError: message },
+      select: documentSelect({ includeXml: true })
+    });
+    throw badRequestWithDetails(message, {
+      document: mapDocument(failed),
+      sriSubmission: buildSriSubmission(document, { status: "FAILED", error: message })
+    });
   }
 
   const messages = authorization.messages || [];
   const estado = authorization.estado;
-  const authorized = estado === "AUTORIZADO";
+  const authorizationNumber = String(authorization.numeroAutorizacion || "").trim();
+  const authorizationDate = parseSriAuthorizationDate(authorization.fechaAutorizacion);
+  const authorized = estado === "AUTORIZADO" && Boolean(authorizationNumber) && Boolean(authorizationDate);
   const rejected = estado === "NO AUTORIZADO";
   const nextStatus = authorized ? "AUTHORIZED" : rejected ? "REJECTED" : "PROCESSING";
-  const errorText = rejected ? sriMessagesText(messages) || "Comprobante no autorizado por el SRI" : null;
-  const updatedDocument = await prisma.sale.update({
+  const errorText = rejected
+    ? sriMessagesText(messages) || "Comprobante no autorizado por el SRI"
+    : estado === "AUTORIZADO" && !authorized
+      ? "El SRI respondio AUTORIZADO sin numero o fecha de autorizacion"
+      : null;
+  let updatedDocument = await prisma.sale.update({
     where: { id: document.id },
     data: {
       sriStatus: nextStatus,
-      sriAuthorizationNumber: authorized
-        ? authorization.numeroAutorizacion || document.sriAccessKey
-        : document.sriAuthorizationNumber,
-      sriAuthorizationDate: authorized
-        ? parseSriAuthorizationDate(authorization.fechaAutorizacion)
-        : document.sriAuthorizationDate,
+      sriAuthorizationNumber: authorized ? authorizationNumber : document.sriAuthorizationNumber,
+      sriAuthorizationDate: authorized ? authorizationDate : document.sriAuthorizationDate,
       sriAuthorizationXml: authorization.authorizationXml || document.sriAuthorizationXml,
       sriMessages: messages,
+      sriAuthorizationError: errorText,
       sriError: errorText
     },
     select: documentSelect({ includeXml: true })
   });
+
+  if (authorized && !updatedDocument.customerEmailSentAt) {
+    try {
+      updatedDocument = await sendAuthorizedInvoiceEmail(user, id, { returnRaw: true });
+    } catch {
+      updatedDocument = await prisma.sale.findFirst({
+        where: scopedSaleWhere(user, { id }),
+        select: documentSelect({ includeXml: true })
+      });
+    }
+  }
 
   return {
     document: mapDocument(updatedDocument),
@@ -1110,6 +1304,238 @@ async function consultSriAuthorization(user, id, options = {}) {
       error: errorText
     })
   };
+}
+
+async function sendAuthorizedInvoiceEmail(user, id, options = {}) {
+  const force = Boolean(options.force);
+  const document = await prisma.sale.findFirst({
+    where: scopedSaleWhere(user, { id }),
+    select: documentSelect({ includeXml: true })
+  });
+
+  if (!document) {
+    throw notFound("Documento no encontrado");
+  }
+
+  assertAuthorizedForEmail(document);
+
+  assertEmailSendAllowed(document, force);
+
+  const attemptAt = new Date();
+  const claim = await prisma.sale.updateMany({
+    where: scopedSaleWhere(user, {
+      id,
+      customerEmailSendingAt: null,
+      ...(force ? {} : { customerEmailSentAt: null })
+    }),
+    data: {
+      customerEmailSendingAt: attemptAt,
+      customerEmailLastAttemptAt: attemptAt,
+      customerEmailAttemptCount: { increment: 1 },
+      customerEmailError: null
+    }
+  });
+
+  if (claim.count !== 1) {
+    throw badRequest("El correo ya fue enviado o existe otro envio en curso");
+  }
+
+  try {
+    const delivery = await deliverInvoiceEmail(document);
+    const sentAt = new Date();
+    const updated = await prisma.sale.update({
+      where: { id },
+      data: {
+        customerEmailSentAt: document.customerEmailSentAt || sentAt,
+        customerEmailLastSentAt: sentAt,
+        customerEmailRecipient: delivery.recipient,
+        customerEmailError: null,
+        customerEmailSendingAt: null
+      },
+      select: documentSelect({ includeXml: true })
+    });
+    return options.returnRaw ? updated : mapDocument(updated);
+  } catch (error) {
+    const message = error.message || "No se pudo enviar la factura por correo";
+    const failed = await prisma.sale.update({
+      where: { id },
+      data: {
+        customerEmailRecipient: document.customer?.email || null,
+        customerEmailError: message,
+        customerEmailSendingAt: null
+      },
+      select: documentSelect({ includeXml: true })
+    });
+    throw badRequestWithDetails(message, { document: mapDocument(failed) });
+  }
+}
+
+function assertEmailSendAllowed(document, force = false) {
+  assertAuthorizedForEmail(document);
+  if (document.customerEmailSentAt && !force) {
+    throw badRequest("La factura ya fue enviada al cliente. Use la accion Reenviar correo.");
+  }
+}
+
+async function updateDocumentWarehouse(user, id, warehouseId) {
+  if (!warehouseId) {
+    throw badRequest("Seleccione una bodega");
+  }
+
+  const document = await prisma.sale.findFirst({
+    where: scopedSaleWhere(user, { id }),
+    select: documentSelect()
+  });
+
+  if (!document) {
+    throw notFound("Documento no encontrado");
+  }
+
+  if (document.documentType !== "INVOICE") {
+    throw badRequest("La bodega solo se puede cambiar en facturas");
+  }
+
+  if (document.status === "VOIDED") {
+    throw badRequest("No se puede cambiar la bodega de un documento anulado");
+  }
+
+  const warehouse = await ensureWarehouse(user, warehouseId);
+
+  if (warehouse.companyId !== document.companyId || warehouse.branchId !== document.branchId) {
+    throw badRequest("La nueva bodega debe pertenecer a la misma empresa y sucursal del documento");
+  }
+
+  if (warehouse.id === document.warehouseId) {
+    return document;
+  }
+
+  const quantities = new Map();
+  document.lines.forEach((line) => {
+    const itemId = line.catalogItem.id;
+    const current = quantities.get(itemId) || { quantity: 0, unitCost: Number(line.stockUnitCost || 0) };
+    current.quantity += Number(line.quantity);
+    quantities.set(itemId, current);
+  });
+
+  const updated = await prisma.$transaction(async (tx) => {
+    for (const [catalogItemId, item] of quantities) {
+      const [oldBalance, newBalance] = await Promise.all([
+        tx.stockBalance.findUnique({
+          where: {
+            tenantId_warehouseId_catalogItemId: {
+              tenantId: user.tenantId,
+              warehouseId: document.warehouseId,
+              catalogItemId
+            }
+          }
+        }),
+        tx.stockBalance.findUnique({
+          where: {
+            tenantId_warehouseId_catalogItemId: {
+              tenantId: user.tenantId,
+              warehouseId: warehouse.id,
+              catalogItemId
+            }
+          }
+        })
+      ]);
+      const available = newBalance
+        ? Number(newBalance.onHand) - Number(newBalance.reserved)
+        : 0;
+
+      if (!newBalance || available < item.quantity) {
+        throw badRequest(
+          `Stock insuficiente en ${warehouse.name} para cambiar la bodega del documento`
+        );
+      }
+
+      if (oldBalance) {
+        await tx.stockBalance.update({
+          where: { id: oldBalance.id },
+          data: { onHand: { increment: decimalString(item.quantity, 4) }, version: { increment: 1 } }
+        });
+      } else {
+        await tx.stockBalance.create({
+          data: {
+            tenantId: user.tenantId,
+            companyId: document.companyId,
+            branchId: document.branchId,
+            warehouseId: document.warehouseId,
+            catalogItemId,
+            onHand: decimalString(item.quantity, 4),
+            averageCost: decimalString(item.unitCost)
+          }
+        });
+      }
+
+      const requiredOnHand = item.quantity + Number(newBalance.reserved || 0);
+      const stockUpdate = await tx.stockBalance.updateMany({
+        where: { id: newBalance.id, onHand: { gte: decimalString(requiredOnHand, 4) } },
+        data: { onHand: { decrement: decimalString(item.quantity, 4) }, version: { increment: 1 } }
+      });
+
+      if (stockUpdate.count !== 1) {
+        throw badRequest(`El stock de ${warehouse.name} cambio; vuelva a intentar`);
+      }
+
+      const newStock = await tx.stockBalance.findUnique({ where: { id: newBalance.id } });
+      const changeId = crypto.randomUUID();
+      await tx.inventoryMovement.createMany({
+        data: [
+          {
+            tenantId: user.tenantId,
+            companyId: document.companyId,
+            branchId: document.branchId,
+            warehouseId: document.warehouseId,
+            catalogItemId,
+            type: "ADJUSTMENT_IN",
+            quantityIn: decimalString(item.quantity, 4),
+            quantityOut: "0.0000",
+            previousOnHand: decimalString(Number(oldBalance?.onHand || 0), 4),
+            nextOnHand: decimalString(Number(oldBalance?.onHand || 0) + item.quantity, 4),
+            unitCost: decimalString(item.unitCost),
+            totalCost: decimalString(item.quantity * item.unitCost),
+            sourceType: "SALE",
+            sourceId: document.id,
+            reference: `Cambio de bodega ${document.documentNumber}`,
+            correlationId: document.correlationId,
+            idempotencyKey: `${document.id}:warehouse-return:${catalogItemId}:${changeId}`,
+            responsibleUserId: user.id,
+            effectiveAt: new Date()
+          },
+          {
+            tenantId: user.tenantId,
+            companyId: document.companyId,
+            branchId: document.branchId,
+            warehouseId: warehouse.id,
+            catalogItemId,
+            type: "ADJUSTMENT_OUT",
+            quantityIn: "0.0000",
+            quantityOut: decimalString(item.quantity, 4),
+            previousOnHand: decimalString(Number(newBalance.onHand), 4),
+            nextOnHand: decimalString(Number(newStock.onHand), 4),
+            unitCost: decimalString(item.unitCost),
+            totalCost: decimalString(item.quantity * item.unitCost),
+            sourceType: "SALE",
+            sourceId: document.id,
+            reference: `Cambio de bodega ${document.documentNumber}`,
+            correlationId: document.correlationId,
+            idempotencyKey: `${document.id}:warehouse-out:${catalogItemId}:${changeId}`,
+            responsibleUserId: user.id,
+            effectiveAt: new Date()
+          }
+        ]
+      });
+    }
+
+    return tx.sale.update({
+      where: { id: document.id },
+      data: { warehouseId: warehouse.id },
+      select: documentSelect({ includeXml: true })
+    });
+  });
+
+  return mapDocument(updated);
 }
 
 async function getRidePdf(user, id) {
@@ -1195,18 +1621,28 @@ async function createDocument(user, body = {}) {
   const total = lines.reduce((sum, line) => sum + line.lineTotal, 0);
   const issueDate = parseDate(body.issueDate, "Fecha de emision") || new Date();
   const { establishmentCode, emissionPoint } = resolveSriNumbering(body, warehouse);
+  const requestedNumber = normalizeRequestedDocumentNumber(
+    body.documentNumber,
+    establishmentCode,
+    emissionPoint
+  );
 
-  const sale = await prisma.$transaction(async (tx) => {
-    const numbering = await getNextDocumentNumber(tx, {
-      tenantId: user.tenantId,
-      companyId: warehouse.companyId,
-      documentType,
-      establishmentCode,
-      emissionPoint
-    });
+  const sale = await prisma
+    .$transaction(async (tx) => {
+      const numbering = await reserveDocumentNumber(
+        tx,
+        {
+          tenantId: user.tenantId,
+          companyId: warehouse.companyId,
+          documentType,
+          establishmentCode,
+          emissionPoint
+        },
+        requestedNumber
+      );
 
-    const created = await tx.sale.create({
-      data: {
+      const created = await tx.sale.create({
+        data: {
         tenantId: user.tenantId,
         companyId: warehouse.companyId,
         branchId: warehouse.branchId,
@@ -1263,41 +1699,52 @@ async function createDocument(user, body = {}) {
               }
             }
           : {})
-      }
-    });
-
-    if (documentType === "INVOICE" || documentType === "SALES_NOTE") {
-      await applySaleInventoryMovements(tx, user, warehouse, created, lines, productById);
-    }
-
-    if (documentType === "CREDIT_NOTE") {
-      await applyCreditNoteInventoryMovements(tx, user, warehouse, created, lines);
-    }
-
-    const documentForXml = await tx.sale.findFirst({
-      where: { id: created.id, tenantId: user.tenantId },
-      select: documentSelect()
-    });
-
-    if (documentType === "INVOICE") {
-      const sriInvoice = buildSriInvoiceXml(documentForXml);
-      validateInvoiceXml(sriInvoice.xml);
-
-      return tx.sale.update({
-        where: { id: created.id },
-        data: {
-          sriAccessKey: sriInvoice.accessKey,
-          sriUnsignedXml: sriInvoice.xml,
-          sriXml: sriInvoice.xml,
-          sriGeneratedAt: new Date(),
-          sriStatus: "PENDING_REVIEW"
-        },
-        select: documentSelect({ includeXml: true })
+        }
       });
-    }
 
-    return documentForXml;
-  });
+      if (documentType === "INVOICE" || documentType === "SALES_NOTE") {
+        await applySaleInventoryMovements(tx, user, warehouse, created, lines, productById);
+      }
+
+      if (documentType === "CREDIT_NOTE") {
+        await applyCreditNoteInventoryMovements(tx, user, warehouse, created, lines);
+      }
+
+      const documentForXml = await tx.sale.findFirst({
+        where: { id: created.id, tenantId: user.tenantId },
+        select: documentSelect()
+      });
+
+      if (documentType === "INVOICE") {
+        const sriInvoice = buildSriInvoiceXml(documentForXml);
+        validateInvoiceXml(sriInvoice.xml);
+
+        return tx.sale.update({
+          where: { id: created.id },
+          data: {
+            sriAccessKey: sriInvoice.accessKey,
+            sriUnsignedXml: sriInvoice.xml,
+            sriXml: sriInvoice.xml,
+            sriGeneratedAt: new Date(),
+            sriStatus: "PENDING_REVIEW"
+          },
+          select: documentSelect({ includeXml: true })
+        });
+      }
+
+      return documentForXml;
+    })
+    .catch((error) => {
+      if (error.code === "P2002") {
+        throw badRequest(
+          `Número de documento repetido: ${
+            requestedNumber?.documentNumber || body.documentNumber || "el número indicado"
+          }. Este documento no puede volver a enviarse.`
+        );
+      }
+
+      throw error;
+    });
 
   return mapDocument(sale);
 }
@@ -1309,11 +1756,17 @@ module.exports = {
   validateSriDocument,
   sendSriDocument,
   consultSriAuthorization,
+  sendAuthorizedInvoiceEmail,
+  updateDocumentWarehouse,
   getRidePdf,
   validateCreditNoteInvoice,
   createDocument,
   _test: {
+    normalizeRequestedDocumentNumber,
+    reserveDocumentNumber,
     resolveSriNumbering,
-    scopedSaleWhere
+    scopedSaleWhere,
+    calculateElectronicMilestones,
+    assertEmailSendAllowed
   }
 };
